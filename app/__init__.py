@@ -1,0 +1,1 @@
+"""Domain Monitor application package."""

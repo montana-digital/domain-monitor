@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Monitors · Domain Monitor{% endblock %}
+{% block main %}
+  <div class="page-head">
+    <h1>Monitors</h1>
+    <p class="lede">Checks run from this machine. A green code is a final 2xx response.</p>
+  </div>
+  {% include "monitors_live.html" %}
+{% endblock %}

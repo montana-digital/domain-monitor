@@ -1,0 +1,13 @@
+<label for="interval">Interval</label>
+<select id="interval" name="interval_minutes">
+  {% for minutes in intervals %}
+  <option value="{{ minutes }}" {% if interval == minutes %}selected{% endif %}>Every {{ minutes }} minute{% if minutes != 1 %}s{% endif %}</option>
+  {% endfor %}
+</select>
+<fieldset>
+  <legend>Checks</legend>
+  <label class="check"><input type="checkbox" name="screenshot" value="yes" {% if screenshot %}checked{% endif %}> Screenshot</label>
+  <label class="check"><input type="checkbox" name="crawl" value="yes" {% if crawl %}checked{% endif %}> Crawl two layers</label>
+  <label class="check"><input type="checkbox" name="use_proxy" value="yes" {% if use_proxy %}checked{% endif %}> Use the proxy pool</label>
+  <label class="check"><input type="checkbox" name="mobile_ua" value="yes" {% if mobile %}checked{% endif %}> Also try a mobile user agent</label>
+</fieldset>

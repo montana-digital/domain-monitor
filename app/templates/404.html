@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Not found · Domain Monitor{% endblock %}
+{% block main %}
+  <section class="empty">
+    <h1>Not found</h1>
+    <p>{{ detail or "That page does not exist." }}</p>
+    <a class="button" href="/">Back to monitors</a>
+  </section>
+{% endblock %}

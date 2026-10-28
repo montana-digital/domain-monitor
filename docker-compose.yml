@@ -1,0 +1,13 @@
+services:
+  domain-monitor:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: "8000"
+      # DOMAIN_MONITOR_PASSWORD: set-a-password
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

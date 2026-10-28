@@ -1,0 +1,58 @@
+<div id="monitor-live" hx-get="/fragment/monitors" hx-trigger="every 15s" hx-swap="outerHTML">
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <caption>Monitored domains</caption>
+      <thead>
+        <tr>
+          <th scope="col">Domain</th>
+          <th scope="col">Status</th>
+          <th scope="col">Check level</th>
+          <th scope="col">Interval</th>
+          <th scope="col">Last checked</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set monitor = row.monitor %}
+        <tr>
+          <td><a class="host" href="/domains/{{ monitor.id }}">{{ monitor.hostname }}</a></td>
+          <td>
+            <span class="pill {{ status_kind(monitor.last_status_code, monitor.last_error, monitor.last_checked_at) }}">{{ short_text(status_text(monitor.last_status_code, monitor.last_error, monitor.last_checked_at), 48) }}</span>
+            {% if row.checking %}<span class="tag">Checking</span>{% endif %}
+            {% if monitor.last_partial %}<span class="tag warn" title="{{ monitor.last_partial_reason or '' }}">Partial</span>{% endif %}
+            {% if row.overdue %}<span class="tag warn">Overdue</span>{% endif %}
+          </td>
+          <td>{{ check_level(monitor.screenshot_enabled, monitor.crawl_enabled, monitor.use_proxy, monitor.mobile_ua) }}</td>
+          <td>Every {{ monitor.interval_minutes }} min</td>
+          <td>{{ format_dt(monitor.last_checked_at) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <section class="empty">
+    <h2>No domains yet</h2>
+    <p>Add one to start monitoring.</p>
+    <a class="button" href="/domains/new">Add a domain</a>
+  </section>
+  {% endif %}
+
+  <section class="problems" aria-labelledby="problems-heading">
+    <h2 id="problems-heading">Recent problems</h2>
+    {% if problems %}
+    <ul>
+      {% for item in problems %}
+      <li>
+        <a href="/domains/{{ item.monitor_id }}">{{ item.hostname }}</a>
+        <span>{{ short_text(item.message, 140) }}</span>
+        <time>{{ format_dt(item.when) }}</time>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="quiet">No failed checks yet.</p>
+    {% endif %}
+  </section>
+</div>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>{% block title %}Domain Monitor{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <script>
+    try {
+      if (localStorage.getItem("tn-theme") === "light") document.documentElement.dataset.theme = "light";
+    } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/"><span>~/domain-monitor</span><span class="cursor" aria-hidden="true"></span></a>
+      {% if show_nav %}
+      <nav aria-label="Primary">
+        <a href="/" {% if section == "monitors" %}aria-current="page"{% endif %}>Monitors</a>
+        <a href="/domains/new" {% if section == "add" %}aria-current="page"{% endif %}>Add domains</a>
+        <a href="/settings" {% if section == "settings" %}aria-current="page"{% endif %}>Settings</a>
+      </nav>
+      {% endif %}
+      <div class="header-tools">
+        <div class="theme-switch" role="group" aria-label="Theme">
+          <button type="button" class="theme-choice" data-theme-choice="dark">Noir</button>
+          <button type="button" class="theme-choice" data-theme-choice="light">Paper</button>
+        </div>
+        {% if password_enabled and show_nav %}
+        <form method="post" action="/logout">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="ghost" type="submit">Log out</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+  <div id="live-banners" hx-get="/notices" hx-trigger="every 30s" hx-swap="innerHTML">
+    {% include "notices.html" %}
+  </div>
+  {% if flash %}
+  <div class="flash-wrap">
+    {% for message in flash %}
+    <p class="flash" role="status">{{ message }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <main id="content">
+    {% block main %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <span class="mono">~/domain-monitor</span>
+      <span class="quiet">Domain Monitor</span>
+    </div>
+  </footer>
+  <script>
+    (function () {
+      var root = document.documentElement;
+      var buttons = Array.prototype.slice.call(document.querySelectorAll("[data-theme-choice]"));
+      function render() {
+        var current = root.dataset.theme === "light" ? "light" : "dark";
+        buttons.forEach(function (button) {
+          button.setAttribute("aria-pressed", String(button.dataset.themeChoice === current));
+        });
+      }
+      buttons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          var next = button.dataset.themeChoice === "light" ? "light" : "dark";
+          if (next === "light") root.dataset.theme = "light";
+          else delete root.dataset.theme;
+          try { localStorage.setItem("tn-theme", next); } catch (e) {}
+          render();
+        });
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>

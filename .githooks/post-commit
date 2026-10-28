@@ -1,0 +1,28 @@
+#!/bin/sh
+# Tag the version stored in the commit that just completed.
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+run_py() {
+  if command -v py >/dev/null 2>&1; then
+    command py -3 "$@"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 "$@"
+  elif command -v python >/dev/null 2>&1; then
+    python "$@"
+  else
+    echo "version bump: Python was not found" >&2
+    exit 1
+  fi
+}
+
+version=$(run_py scripts/version_bump.py --print)
+tag="v${version}"
+
+if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+  exit 0
+fi
+
+git tag -a "$tag" -m "$tag"

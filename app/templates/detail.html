@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}{{ monitor.hostname }} · Domain Monitor{% endblock %}
+{% macro icon_check() %}
+<svg class="mark-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+  <path d="M3.5 8.4 6.4 11.3 12.5 4.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+{% endmacro %}
+{% macro icon_cross() %}
+<svg class="mark-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+  <path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+</svg>
+{% endmacro %}
+{% macro icon_warn() %}
+<svg class="mark-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+  <path d="M8 2.8 13.6 13H2.4L8 2.8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M8 6.6v3.1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M8 11.5h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+</svg>
+{% endmacro %}
+{% macro icon_desktop() %}
+<svg class="mark-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+  <rect x="1.6" y="2.4" width="12.8" height="8.2" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/>
+  <path d="M6 13.4h4M8 10.6v2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+</svg>
+{% endmacro %}
+{% macro icon_mobile() %}
+<svg class="mark-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+  <rect x="4.4" y="1.5" width="7.2" height="13" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+  <path d="M7 12.6h2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+</svg>
+{% endmacro %}
+{% block main %}
+  <p class="crumb"><a href="/">Monitors</a></p>
+  <div class="page-head">
+    <h1 class="host-title">{{ monitor.hostname }}</h1>
+    <p class="lede">
+      <span class="pill {{ status_kind(monitor.last_status_code, monitor.last_error, monitor.last_checked_at) }}">{{ short_text(status_text(monitor.last_status_code, monitor.last_error, monitor.last_checked_at), 60) }}</span>
+      <span class="tag">{{ check_level(monitor.screenshot_enabled, monitor.crawl_enabled, monitor.use_proxy, monitor.mobile_ua) }}</span>
+      {% if checking %}<span class="tag">Checking</span>{% endif %}
+      {% if monitor.last_partial %}<span class="tag warn">Partial{% if monitor.last_partial_reason %}: {{ monitor.last_partial_reason }}{% endif %}</span>{% endif %}
+      {% if overdue %}<span class="tag warn">Overdue</span>{% endif %}
+    </p>
+  </div>
+
+  <section class="facts" aria-label="Summary">
+    <p><strong>Registry last updated:</strong> {{ format_dt(registration.record.updated_date if registration.record else none) }}</p>
+    <p><strong>Last checked:</strong> {{ format_dt(monitor.last_checked_at) }}</p>
+    <p><strong>Registrable domain:</strong> <span class="mono">{{ monitor.registrable_domain }}</span></p>
+  </section>
+
+  {% if monitor.use_proxy and not proxy_count %}
+  <p class="banner">Proxy checks are on, and no enabled proxies are saved in Settings.</p>
+  {% endif %}
+
+  <details class="fold">
+    <summary>
+      <h2 id="whois-heading">WHOIS / RDAP</h2>
+    </summary>
+    {% if registration.pending %}
+    <p>Registration lookup has not completed yet.</p>
+    {% else %}
+      {% if registration.failed %}
+      <p class="banner">
+        Registration lookup failed at {{ format_dt(registration.fetched_at) }}: {{ registration.error }}
+        {% if registration.record %}Showing the last successful record from {{ format_dt(registration.success_at) }}.{% endif %}
+      </p>
+      {% endif %}
+      {% if registration.record %}
+      <dl class="record">
+        <div><dt>Registrar</dt><dd>{{ registration.record.registrar or "—" }}</dd></div>
+        <div><dt>Created</dt><dd>{{ format_dt(registration.record.created_date) }}</dd></div>
+        <div><dt>Updated</dt><dd>{{ format_dt(registration.record.updated_date) }}</dd></div>
+        <div><dt>Expires</dt><dd>{{ format_dt(registration.record.expires_date) }}</dd></div>
+        <div><dt>Nameservers</dt><dd>{% if json_list(registration.record.nameservers) %}{{ json_list(registration.record.nameservers)|join(", ") }}{% else %}—{% endif %}</dd></div>
+        <div><dt>Statuses</dt><dd>{% if json_list(registration.record.statuses) %}{{ json_list(registration.record.statuses)|join(", ") }}{% else %}—{% endif %}</dd></div>
+        <div><dt>Source</dt><dd>{{ registration.record.source or "—" }}</dd></div>
+        <div><dt>Last lookup</dt><dd>{{ format_dt(registration.fetched_at) }}</dd></div>
+      </dl>
+      {% else %}
+      <p>No registration record is available yet.</p>
+      {% endif %}
+    {% endif %}
+  </details>
+
+  <details class="fold">
+    <summary>
+      <h2 id="edit-heading">Setup for {{ monitor.hostname }}</h2>
+    </summary>
+    <form method="post" action="/domains/{{ monitor.id }}/edit">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% set interval = monitor.interval_minutes %}
+      {% set screenshot = monitor.screenshot_enabled %}
+      {% set crawl = monitor.crawl_enabled %}
+      {% set use_proxy = monitor.use_proxy %}
+      {% set mobile = monitor.mobile_ua %}
+      {% include "toggles.html" %}
+      <button type="submit">Save</button>
+    </form>
+  </details>
+
+  <div class="section-row history-head">
+    <h2 id="history-heading">Check history</h2>
+    <form method="post" action="/domains/{{ monitor.id }}/check">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" {% if checking %}disabled{% endif %}>Check now</button>
+    </form>
+  </div>
+  {% if total > 50 %}
+  <p class="quiet">Showing {{ events|length }} of {{ total }} checks.</p>
+  {% endif %}
+  {% if not events %}
+  <p>No checks yet. The first check runs shortly after a domain is added.</p>
+  {% endif %}
+  {% for event in events %}
+  {% set profiles = profiles_used(event.attempts, event.screenshots) %}
+  <details class="fold event">
+    <summary>
+      <span class="fold-title">{{ format_dt(event.started_at) }}</span>
+      <span class="pill {{ status_kind(event.status_code, event.error, event.finished_at) }}">{{ short_text(status_text(event.status_code, event.error, event.finished_at), 60) }}</span>
+      <span class="fold-marks">
+        {% if monitor.screenshot_enabled %}
+          {% set shot_mark = screenshot_mark(event.screenshot_outcome, event.screenshots) %}
+          {% if shot_mark == "saved" %}
+          <span class="mark ok" title="Screenshot saved">
+            <span class="mark-label" aria-hidden="true">Screenshot</span>
+            {{ icon_check() }}
+            <span class="sr-only">Screenshot saved</span>
+          </span>
+          {% elif shot_mark == "removed" %}
+          <span class="mark warn" title="Screenshot removed">
+            <span class="mark-label" aria-hidden="true">Screenshot</span>
+            {{ icon_warn() }}
+            <span class="sr-only">Screenshot removed</span>
+          </span>
+          {% else %}
+          <span class="mark bad" title="No screenshot">
+            <span class="mark-label" aria-hidden="true">Screenshot</span>
+            {{ icon_cross() }}
+            <span class="sr-only">No screenshot</span>
+          </span>
+          {% endif %}
+        {% endif %}
+        {% if monitor.crawl_enabled %}
+          {% if event.crawl_outcome == "succeeded" %}
+          <span class="mark ok" title="Crawl saved">
+            <span class="mark-label" aria-hidden="true">Crawl</span>
+            {{ icon_check() }}
+            <span class="sr-only">Crawl saved</span>
+          </span>
+          {% elif event.crawl_outcome == "partial" %}
+          <span class="mark warn" title="Crawl partial">
+            <span class="mark-label" aria-hidden="true">Crawl</span>
+            {{ icon_warn() }}
+            <span class="sr-only">Crawl partial</span>
+          </span>
+          {% else %}
+          <span class="mark bad" title="No crawl">
+            <span class="mark-label" aria-hidden="true">Crawl</span>
+            {{ icon_cross() }}
+            <span class="sr-only">No crawl</span>
+          </span>
+          {% endif %}
+        {% endif %}
+        {% if "desktop" in profiles %}
+        <span class="mark device" title="Desktop">
+          {{ icon_desktop() }}
+          <span class="sr-only">Desktop</span>
+        </span>
+        {% endif %}
+        {% if "mobile" in profiles %}
+        <span class="mark device" title="Mobile">
+          {{ icon_mobile() }}
+          <span class="sr-only">Mobile</span>
+        </span>
+        {% endif %}
+      </span>
+      <span class="quiet">{{ event.trigger }}{% if event.scheme %} · {{ event.scheme }}{% endif %}</span>
+      {% if event.partial %}<span class="tag warn">{{ event.partial_reason }}</span>{% endif %}
+    </summary>
+    {% if event.attempts %}
+    <div class="table-wrap">
+      <table class="wide">
+        <caption>Attempts for {{ format_dt(event.started_at) }}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Vantage</th>
+            <th scope="col">Result</th>
+            <th scope="col">Latency</th>
+            <th scope="col">Final URL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for attempt in event.attempts %}
+          <tr>
+            <td>{{ attempt.vantage }}</td>
+            <td>
+              {% if attempt.status_code is not none %}
+              <span class="pill {{ status_kind(attempt.status_code, none, event.finished_at) }}">{{ attempt.status_code }}</span>
+              {% else %}
+              <span class="pill bad">{{ short_text(attempt.error or "Failed", 80) }}</span>
+              {% endif %}
+              {% if attempt.last_modified %}<div class="quiet">Last-Modified {{ attempt.last_modified }}</div>{% endif %}
+            </td>
+            <td>{% if attempt.latency_ms is not none %}{{ attempt.latency_ms }} ms{% else %}—{% endif %}</td>
+            <td class="mono wrap">{{ attempt.final_url or "—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% if event.screenshot_outcome != "skipped" or event.screenshots %}
+    <h4>Screenshots</h4>
+    {% if event.screenshot_outcome == "failed" %}
+    <p class="fail">Screenshot failed: {{ event.screenshot_error or "No image was stored." }}</p>
+    {% endif %}
+    <div class="shots">
+      {% for shot in event.screenshots %}
+      <figure>
+        {% if shot.path %}
+        <img src="/screenshots/{{ shot.id }}" alt="{{ shot.viewport }} screenshot of {{ monitor.hostname }} taken {{ format_dt(event.started_at) }}">
+        {% else %}
+        <p class="fail">{{ shot.viewport }}: {{ shot.error or "Image removed by retention." }}</p>
+        {% endif %}
+        <figcaption>{{ shot.viewport }}</figcaption>
+      </figure>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if event.crawl_outcome != "skipped" %}
+    <details>
+      <summary>Crawl {{ event.crawl_outcome }} · {{ event.crawl_saved }} saved, {{ event.crawl_failed }} failed</summary>
+      {% if event.crawl_error %}<p class="fail">{{ event.crawl_error }}</p>{% endif %}
+      {% if event.crawl_note %}<p class="quiet">{{ event.crawl_note }}</p>{% endif %}
+      {% if event.pages %}
+      <div class="table-wrap">
+        <table class="wide">
+          <thead>
+            <tr>
+              <th scope="col">Depth</th>
+              <th scope="col">URL</th>
+              <th scope="col">Result</th>
+              <th scope="col">Title</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for page_row in event.pages %}
+            <tr>
+              <td>{{ page_row.depth }}</td>
+              <td class="mono wrap">{{ page_row.url }}</td>
+              <td>{% if page_row.status_code is not none %}{{ page_row.status_code }}{% else %}{{ page_row.error or "Failed" }}{% endif %}</td>
+              <td>{{ page_row.title or "—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </details>
+    {% endif %}
+  </details>
+  {% endfor %}
+  {% if pages > 1 %}
+  <nav class="pager" aria-label="Check history pages">
+    {% if page > 1 %}<a href="/domains/{{ monitor.id }}?page={{ page - 1 }}">Newer</a>{% endif %}
+    <span>Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a href="/domains/{{ monitor.id }}?page={{ page + 1 }}">Older</a>{% endif %}
+  </nav>
+  {% endif %}
+
+  <details class="fold danger-zone"{% if confirm_delete %} open{% endif %}>
+    <summary>
+      <h2 id="delete-heading">Delete</h2>
+    </summary>
+    {% if confirm_delete %}
+    <p>Delete {{ monitor.hostname }} and its check history?</p>
+    <form method="post" action="/domains/{{ monitor.id }}/delete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="confirm" value="yes">
+      <button class="danger" type="submit">Delete permanently</button>
+      <a class="button secondary" href="/domains/{{ monitor.id }}">Cancel</a>
+    </form>
+    {% else %}
+    <form method="post" action="/domains/{{ monitor.id }}/delete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="danger" type="submit">Delete domain</button>
+    </form>
+    {% endif %}
+  </details>
+{% endblock %}

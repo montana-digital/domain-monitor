@@ -1,0 +1,30 @@
+#!/bin/sh
+# Raise the patch version on every commit after the first.
+set -eu
+
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+  exit 0
+fi
+
+if [ "${SKIP_VERSION_BUMP:-}" = "1" ]; then
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+run_py() {
+  if command -v py >/dev/null 2>&1; then
+    command py -3 "$@"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 "$@"
+  elif command -v python >/dev/null 2>&1; then
+    python "$@"
+  else
+    echo "version bump: Python was not found" >&2
+    exit 1
+  fi
+}
+
+run_py scripts/version_bump.py --bump
+git add -- pyproject.toml

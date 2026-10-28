@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Settings · Domain Monitor{% endblock %}
+{% block main %}
+  <div class="page-head">
+    <h1>Settings</h1>
+    <p class="lede">Proxies are shared. A monitor uses them only when its proxy check is on.</p>
+  </div>
+  <div class="split">
+    <section class="card" aria-labelledby="retention-heading">
+      <h2 id="retention-heading">Screenshot retention</h2>
+      <p class="quiet">Older image files are removed. The check rows stay, and the detail page says the image was removed.</p>
+      {% if retention_error %}<p class="form-error" role="alert">{{ retention_error }}</p>{% endif %}
+      <form method="post" action="/settings/retention">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label for="retention">Keep screenshots</label>
+        <select id="retention" name="retention_days">
+          {% for days in retention_choices %}
+          <option value="{{ days }}" {% if retention_days == days %}selected{% endif %}>{{ days }} days</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Save retention</button>
+      </form>
+    </section>
+    <section class="card" aria-labelledby="proxy-heading">
+      <h2 id="proxy-heading">Proxy pool</h2>
+      <p class="quiet">HTTP and HTTPS proxies only. The address can be on your own network. Credentials stay in the database and are not shown again.</p>
+      {% if proxy_error %}<p class="form-error" role="alert">{{ proxy_error }}</p>{% endif %}
+      <form method="post" action="/settings/proxies">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label for="proxy-url">Proxy URL</label>
+        <input id="proxy-url" name="url" type="text" autocomplete="off" placeholder="http://proxy.example:8080" value="{{ proxy_value }}">
+        <button type="submit">Add proxy</button>
+      </form>
+    </section>
+  </div>
+  <section class="card" aria-labelledby="proxy-list-heading">
+    <h2 id="proxy-list-heading">Saved proxies</h2>
+    {% if proxies %}
+    <ul class="proxy-list">
+      {% for proxy in proxies %}
+      <li>
+        <div>
+          <strong class="mono">{{ proxy_label(proxy.url) }}</strong>
+          {% if proxy.enabled %}<span class="tag">Enabled</span>{% else %}<span class="tag">Disabled</span>{% endif %}
+          {% if proxy.last_error %}<p class="fail">{{ proxy.last_error }}</p>{% endif %}
+        </div>
+        <div class="row-actions">
+          <form method="post" action="/settings/proxies/{{ proxy.id }}/toggle">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="secondary" type="submit">{% if proxy.enabled %}Disable{% else %}Enable{% endif %}</button>
+          </form>
+          <form method="post" action="/settings/proxies/{{ proxy.id }}/delete">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="danger" type="submit">Remove</button>
+          </form>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="quiet">No proxies saved.</p>
+    {% endif %}
+  </section>
+{% endblock %}
