@@ -11,10 +11,12 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -25,6 +27,8 @@ PYPROJECT = ROOT / "pyproject.toml"
 UNIT_PATH = Path("/etc/systemd/system/domain-monitor.service")
 MIN_PYTHON = (3, 12)
 DEPS_STAMP_NAME = ".system-deps"
+APT_LOCK_ATTEMPTS = 6
+APT_LOCK_WAIT_SECONDS = 10
 RUNTIME_IMPORTS = ("fastapi", "uvicorn", "playwright")
 CHROMIUM_EXECUTABLES = (
     Path("chrome-linux64") / "chrome",
@@ -202,26 +206,68 @@ def browser_env() -> dict[str, str]:
     return env
 
 
-def run_as_root(command: list[str], extra_env: dict[str, str] | None = None) -> None:
-    """Run command as root.
+def venv_apt_package(version: tuple[int, ...]) -> str:
+    return f"python{version[0]}.{version[1]}-venv"
 
-    Extra variables are passed with ``env`` after sudo, which a stock Ubuntu
-    sudoers policy allows.
-    """
-    if have_root():
-        env = os.environ.copy()
-        if extra_env:
-            env.update(extra_env)
-        subprocess.run(command, cwd=ROOT, env=env, check=True)
-        return
-    sudo = shutil.which("sudo")
-    if sudo is None:
-        raise SystemExit("This step needs root. Run:\n  " + " ".join(command))
-    prefix = [sudo]
+
+def root_argv(
+    sudo: str | None,
+    command: list[str],
+    extra_env: dict[str, str] | None = None,
+) -> list[str]:
+    """Argv for a root command. Extra variables are set inside the root shell."""
     if extra_env:
-        prefix.append("env")
-        prefix.extend(f"{key}={value}" for key, value in extra_env.items())
-    subprocess.run([*prefix, *command], cwd=ROOT, check=True)
+        exports = " ".join(
+            f"export {key}={shlex.quote(value)};" for key, value in extra_env.items()
+        )
+        script = exports + " " + " ".join(shlex.quote(part) for part in command)
+        wrapped = ["bash", "-c", script]
+    else:
+        wrapped = list(command)
+    if sudo:
+        return [sudo, *wrapped]
+    return wrapped
+
+
+def apt_lock_busy(text: str) -> bool:
+    return "lock-frontend" in text
+
+
+def run_showing(argv: list[str]) -> tuple[int, str]:
+    process = subprocess.Popen(
+        argv,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    chunks: list[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        print(line, end="", flush=True)
+        chunks.append(line)
+    return process.wait(), "".join(chunks)
+
+
+def run_as_root(
+    command: list[str],
+    extra_env: dict[str, str] | None = None,
+    retry_lock: bool = False,
+) -> None:
+    sudo = None if have_root() else shutil.which("sudo")
+    if sudo is None and not have_root():
+        raise SystemExit("This step needs root. Run:\n  " + " ".join(command))
+    argv = root_argv(sudo, command, extra_env)
+    attempts = APT_LOCK_ATTEMPTS if retry_lock else 1
+    for attempt in range(1, attempts + 1):
+        code, output = run_showing(argv)
+        if code == 0:
+            return
+        if retry_lock and apt_lock_busy(output) and attempt < attempts:
+            say("Ubuntu Software is using apt. Waiting to try again.")
+            time.sleep(APT_LOCK_WAIT_SECONDS)
+            continue
+        raise subprocess.CalledProcessError(code, argv)
 
 
 def venv_python() -> Path:
@@ -244,9 +290,8 @@ def install_apt_packages(packages: list[str]) -> None:
             + " ".join(packages)
         )
     say("Installing system packages: " + ", ".join(packages))
-    apt = {"DEBIAN_FRONTEND": "noninteractive"}
-    run_as_root(["apt-get", "update"], extra_env=apt)
-    run_as_root(["apt-get", "install", "-y", *packages], extra_env=apt)
+    run_as_root(["apt-get", "update"], retry_lock=True)
+    run_as_root(["apt-get", "install", "-y", *packages], retry_lock=True)
 
 
 def interpreter_version(python: Path) -> tuple[int, int] | None:
@@ -265,9 +310,10 @@ def interpreter_version(python: Path) -> tuple[int, int] | None:
 
 def create_venv() -> None:
     if not ensurepip_available():
-        install_apt_packages(["python3-venv"])
+        package = venv_apt_package(sys.version_info)
+        install_apt_packages([package])
         if not ensurepip_available():
-            raise SystemExit("python3-venv is still missing after apt install.")
+            raise SystemExit(f"{package} is still missing after apt install.")
     say("Creating .venv.")
     subprocess.run([sys.executable, "-m", "venv", str(VENV)], cwd=ROOT, check=True)
 
@@ -346,6 +392,7 @@ def ensure_chromium(repair: bool) -> None:
         run_as_root(
             [str(venv_python()), "-m", "playwright", "install-deps", "chromium"],
             extra_env={"DEBIAN_FRONTEND": "noninteractive"},
+            retry_lock=True,
         )
         mark_chromium_deps(BROWSERS)
 

@@ -4,6 +4,7 @@ import pytest
 
 from launch import (
     DEPS_STAMP_NAME,
+    apt_lock_busy,
     chromium_present,
     chromium_ready,
     needs_pip_install,
@@ -11,7 +12,9 @@ from launch import (
     python_version_ok,
     read_project_version,
     render_unit,
+    root_argv,
     unsupported_platform_message,
+    venv_apt_package,
     venv_satisfies,
 )
 
@@ -129,3 +132,34 @@ def test_service_unit_quotes_a_password():
         secret=None,
     )
     assert 'Environment="DOMAIN_MONITOR_PASSWORD=a b#c"' in text
+
+
+def test_venv_package_matches_the_running_interpreter():
+    assert venv_apt_package((3, 13)) == "python3.13-venv"
+    assert venv_apt_package((3, 12, 3)) == "python3.12-venv"
+
+
+def test_root_command_is_plain_sudo_apt():
+    argv = root_argv("sudo", ["apt-get", "install", "-y", "python3.13-venv"])
+    assert argv == ["sudo", "apt-get", "install", "-y", "python3.13-venv"]
+    assert "env" not in argv
+
+
+def test_root_command_sets_variables_inside_the_shell():
+    argv = root_argv(
+        "sudo",
+        ["/opt/domain monitor/.venv/bin/python", "-m", "playwright", "install-deps", "chromium"],
+        {"DEBIAN_FRONTEND": "noninteractive"},
+    )
+    assert argv[:3] == ["sudo", "bash", "-c"]
+    assert "env" not in argv
+    script = argv[3]
+    assert script.startswith("export DEBIAN_FRONTEND=noninteractive;")
+    assert "'/opt/domain monitor/.venv/bin/python'" in script
+    assert "install-deps" in script
+
+
+def test_apt_lock_frontend_is_retryable():
+    busy = "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1000 (packagekitd)"
+    assert apt_lock_busy(busy)
+    assert not apt_lock_busy("E: Unable to locate package python3.13-venv")

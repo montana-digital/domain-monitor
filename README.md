@@ -16,7 +16,7 @@ From the repository directory, with Python 3.12 or newer:
 python3 launch.py
 ```
 
-The first run creates `.venv`, installs this checkout, and downloads Chromium into `.playwright`. It may ask for a sudo password to install `python3-venv` and the libraries Chromium needs. Later runs start the server.
+The first run creates `.venv`, installs this checkout, and downloads Chromium into `.playwright`. It may ask for a sudo password to install the Python venv package for this interpreter (`python3.13-venv` on Ubuntu 25) and the libraries Chromium needs. Later runs start the server.
 
 Open `http://127.0.0.1:8000`. The database and screenshots are stored in `./data`.
 

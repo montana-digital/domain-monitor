@@ -59,7 +59,7 @@ There is no Docker `HEALTHCHECK`. `GET /health` can be used as one. It returns s
 Each step is skipped when it is already true:
 
 - Python is 3.12 or newer. The script does not replace the system Python.
-- `venv` and `ensurepip` import. If they do not, it installs `python3-venv` with apt. That install, and Chromium's libraries, may ask for sudo. Without sudo it prints the command and stops.
+- `venv` and `ensurepip` import. If they do not, it installs the venv package for the running interpreter with `sudo apt-get install -y` (`python3.13-venv` on Ubuntu 25). That install, and Chromium's libraries, may ask for the desktop sudo password. Without sudo it prints the command and stops. If Ubuntu Software holds `/var/lib/dpkg/lock-frontend`, the launcher waits and tries again. Chromium's library install sets `DEBIAN_FRONTEND` inside the root shell.
 - `.venv` exists and its Python is 3.12 or newer. A missing or older virtualenv is created with the same interpreter that started the script.
 - The virtualenv imports FastAPI, Uvicorn, and Playwright, and the installed `domain-monitor` version matches `pyproject.toml`. Otherwise it runs `pip install -e .`. An editable install serves templates from the checkout, so a later pull of Python files is used on the next start. A pull that changes the version runs pip again.
 - Chromium's `chrome` binary is under `.playwright/chromium-*`, at `chrome-linux64/chrome` or `chrome-linux/chrome`. If it is missing, `PLAYWRIGHT_BROWSERS_PATH` is set to `.playwright` and `playwright install chromium` runs as the installing user.
