@@ -2,7 +2,7 @@
 
 Every check runs on the machine that hosts Domain Monitor. The process opens outbound connections itself. It does not call a hosted monitoring API, and it does not receive inbound webhooks.
 
-This repository is a self-hosted FastAPI process, run with Docker or with Uvicorn on Debian or Ubuntu. It is not a Netlify site and it is not a Render service. There is no `netlify.toml`, no serverless function entry, and no `render.yaml`.
+This repository is a self-hosted FastAPI process, run with Uvicorn on Debian or Ubuntu through [launch.py](../launch.py). It does not use Docker. It is not a Netlify site and it is not a Render service. There is no `netlify.toml`, no serverless function entry, and no `render.yaml`.
 
 ## What the process contacts
 

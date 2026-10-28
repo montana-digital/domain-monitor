@@ -36,24 +36,7 @@ python3 launch.py --service
 
 That writes a systemd unit which runs `.venv/bin/python -m app.main` as the user who installed it. Data stays in `./data`, and Chromium stays in `.playwright`. Starting the service does not install packages again.
 
-## Run with Docker
-
-Docker is optional. The image includes Chromium, which screenshots need.
-
-```bash
-docker compose up --build -d
-```
-
-Open `http://127.0.0.1:8000`. The database and screenshots are stored in `./data`.
-
-Set a password before you expose the port beyond localhost:
-
-```bash
-# in the environment of the compose service
-DOMAIN_MONITOR_PASSWORD=choose-a-long-password
-```
-
-The container runs as uid 1000. `./data` must be writable by that user. Chromium keeps its sandbox. Set `DOMAIN_MONITOR_HTTPS_ONLY=1` only when TLS ends at this process.
+Chromium comes from Playwright into `.playwright`. Nothing in this install uses Docker.
 
 ## Local development
 

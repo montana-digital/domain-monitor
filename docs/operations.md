@@ -1,6 +1,6 @@
 # Operations
 
-The usual install on Debian or Ubuntu is [launch.py](../launch.py): `python3 launch.py` from the repository. It creates a virtualenv, installs this checkout, and downloads Chromium into `.playwright`. Docker is an optional image of the same process. Both run Uvicorn serving `app.main:app`, with SQLite and Chromium on that machine. The operator steps are in [README.md](../README.md).
+The install is [launch.py](../launch.py): `python3 launch.py` from the repository. It creates a virtualenv, installs this checkout, and downloads Chromium into `.playwright`. The process is Uvicorn serving `app.main:app`, with SQLite and Chromium on that machine. Docker is not used. The operator steps are in [README.md](../README.md).
 
 ## Environment
 
@@ -13,12 +13,6 @@ The usual install on Debian or Ubuntu is [launch.py](../launch.py): `python3 lau
 | `PORT` | `8000` | Bind port used by `python -m app.main`. |
 | `DOMAIN_MONITOR_PASSWORD` | unset | One shared password. Unset means the UI does not ask for a login. |
 | `DOMAIN_MONITOR_SECRET` | a key created in `DATA_DIR/secret.key` | Session signing key. |
-
-Docker Compose sets `DATA_DIR=/data`, `HOST=0.0.0.0`, and `PORT=8000`. The image `CMD` does not read `HOST`. It runs:
-
-```sh
-uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
-```
 
 `python -m app.main`, which is what the launcher starts, reads `HOST` and `PORT`. Leave `HOST` at `127.0.0.1` unless other machines must reach the port. Set the password before the port is reachable beyond the machine. The launcher prints a warning when `HOST` is not a loopback address and `DOMAIN_MONITOR_PASSWORD` is unset, then still starts.
 
@@ -38,19 +32,9 @@ Copy the whole directory to move a deployment. Screenshot rows store the JPEG fi
 
 The database file is not encrypted. Proxy URLs, including credentials, are in `proxies.url`.
 
-## Docker
+## Health
 
-[Dockerfile](../Dockerfile) uses `python:3.12-bookworm`. It sets `PYTHONDONTWRITEBYTECODE`, `PYTHONUNBUFFERED`, and `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`, installs the package, and runs `playwright install --with-deps chromium`. The image exposes port 8000 and declares a volume at `/data`. The process runs as uid 1000, user `monitor`, so Chromium does not add `--no-sandbox`. The bind-mounted data directory must be writable by that user. A bare-metal process that still runs as root does add `--no-sandbox`.
-
-[docker-compose.yml](../docker-compose.yml) builds that image, publishes `8000:8000`, mounts `./data` on `/data`, and restarts unless stopped. `DOMAIN_MONITOR_PASSWORD` is commented out. A published port with no password is an open UI.
-
-```bash
-docker compose up --build -d
-```
-
-The UI is at `http://127.0.0.1:8000` when that publish is left as written.
-
-There is no Docker `HEALTHCHECK`. `GET /health` can be used as one. It returns status 200 and `{"status": "ok"}` when the database answers `SELECT 1` and the scheduler is not stalled. A database that cannot be opened, or an enabled scheduler with no tick for more than 60 seconds, returns status 503.
+`GET /health` returns status 200 and `{"status": "ok"}` when the database answers `SELECT 1` and the scheduler is not stalled. A database that cannot be opened, or an enabled scheduler with no tick for more than 60 seconds, returns status 503.
 
 ## Ubuntu launcher
 

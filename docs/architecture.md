@@ -2,7 +2,7 @@
 
 Domain Monitor is one operating-system process. [app/main.py](../app/main.py) builds a FastAPI application that serves HTML, and the same process runs APScheduler, httpx probes, Playwright Chromium, and SQLite writes. There is no second service to deploy.
 
-Importing `app.main` calls `create_app()`, which reads the environment, creates the data directory, and opens the database before the server accepts connections. Docker starts Uvicorn on `app.main:app`. `python -m app.main` uses the host and port from settings.
+Importing `app.main` calls `create_app()`, which reads the environment, creates the data directory, and opens the database before the server accepts connections. `python -m app.main` starts Uvicorn on `app.main:app` and uses the host and port from settings.
 
 ## Startup
 

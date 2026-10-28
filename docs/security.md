@@ -35,7 +35,7 @@ Starlette `SessionMiddleware` signs the cookie with `settings.secret_key`.
 
 With the default, the cookie is accepted on plain HTTP. That is the localhost path. Set `DOMAIN_MONITOR_HTTPS_ONLY` when TLS ends at this process, and the cookie is then marked HTTPS-only. A reverse proxy that terminates TLS in front of plain HTTP to this process should leave the setting off, because the app itself is still speaking HTTP.
 
-The secret is `DOMAIN_MONITOR_SECRET` when that variable is set. Otherwise [app/config.py](../app/config.py) reads `DATA_DIR/secret.key`, or creates it with `secrets.token_hex(32)` and tries `chmod 0600`. A failure to chmod is ignored. Replacing or deleting the key signs out every browser. The key file is inside the data directory, which Docker bind-mounts from `./data`.
+The secret is `DOMAIN_MONITOR_SECRET` when that variable is set. Otherwise [app/config.py](../app/config.py) reads `DATA_DIR/secret.key`, or creates it with `secrets.token_hex(32)` and tries `chmod 0600`. A failure to chmod is ignored. Replacing or deleting the key signs out every browser. The key file is inside the data directory, which defaults to `./data`.
 
 The session holds `auth`, the CSRF token, and flash messages. Those values are not written to SQLite.
 
@@ -112,7 +112,7 @@ The preview route reads the upload into memory and rejects a body larger than 1_
 
 ## Chromium
 
-Playwright launches headless Chromium with `--disable-dev-shm-usage`. When the process is root (`geteuid() == 0`), it also passes `--no-sandbox`. The Docker image runs as uid 1000 (`monitor`), so the container does not add `--no-sandbox`. A bare-metal process running as root still does. Screenshot contexts set `ignore_https_errors=True`, so a certificate error does not stop a capture of a page the HTTP probe was able to classify.
+Playwright launches headless Chromium with `--disable-dev-shm-usage`. When the process is root (`geteuid() == 0`), it also passes `--no-sandbox`. A process running as a normal user does not. Screenshot contexts set `ignore_https_errors=True`, so a certificate error does not stop a capture of a page the HTTP probe was able to classify.
 
 The browser process is local. It loads the monitored page and that page's subresources, subject to the route guard above.
 
@@ -126,7 +126,7 @@ Registration snapshots store registrar, dates, nameservers, and statuses. They d
 
 A localhost install with the password unset stays an open UI on `127.0.0.1`. The session cookie is accepted on HTTP, and login throttling is not in front of the pages.
 
-When the port is reachable beyond the machine, set `DOMAIN_MONITOR_PASSWORD`. Login attempts are then throttled as described above. Keep the bare-metal `HOST` at `127.0.0.1` unless exposure is intentional. Docker publishes `8000:8000` and binds `0.0.0.0` inside the container. The compose file leaves the password commented out, so a published Docker port without that variable is an open UI. The container process is uid 1000, and `./data` must be writable by that user.
+When the port is reachable beyond the machine, set `DOMAIN_MONITOR_PASSWORD`. Login attempts are then throttled as described above. Keep `HOST` at `127.0.0.1` unless exposure is intentional. `HOST=0.0.0.0` without that password is an open UI. `./data` must be writable by the user who runs the process.
 
 Set `DOMAIN_MONITOR_HTTPS_ONLY` when TLS ends at this process. Leave it unset when a reverse proxy terminates TLS and forwards plain HTTP. Direct checks connect to the address the safety check allowed. A monitor that uses the operator proxy still lets that proxy open the target connection.
 

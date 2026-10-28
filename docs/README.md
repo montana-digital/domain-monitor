@@ -15,7 +15,7 @@ The operator quickstart is [README.md](../README.md). This directory is the desi
 | How one check is probed, aggregated, captured, crawled, and saved | [check-pipeline.md](check-pipeline.md) |
 | Authentication, CSRF, SSRF controls, and their limits | [security.md](security.md) |
 | Which networks and registries the process talks to | [external-services.md](external-services.md) |
-| Ubuntu launcher, Docker, environment, data files, and version hooks | [operations.md](operations.md) |
+| Ubuntu launcher, environment, data files, and version hooks | [operations.md](operations.md) |
 | Pages, forms, live refresh, and how status text is chosen | [ui.md](ui.md) |
 | Later work that is not current behavior | [backlog.md](backlog.md) |
 

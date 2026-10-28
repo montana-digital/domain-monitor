@@ -112,7 +112,7 @@ Viewports:
 
 Both shots use the capture-target URL. Mobile is a second viewport of that page, not a separate origin.
 
-Chromium launches headless through Playwright. Arguments are `--disable-dev-shm-usage`, plus `--no-sandbox` when `os.geteuid()` exists and returns 0. The Docker image runs as uid 1000, so the container does not take that path. A disconnected browser is closed and launched again. One browser is reused across checks.
+Chromium launches headless through Playwright. Arguments are `--disable-dev-shm-usage`, plus `--no-sandbox` when `os.geteuid()` exists and returns 0. A normal user keeps the sandbox. A disconnected browser is closed and launched again. One browser is reused across checks.
 
 Each shot gets a browser context with the matching user agent, viewport, `ignore_https_errors=True`, and the Playwright proxy config when the capture target used a proxy. Username and password are taken from the proxy URL. Every network request in the page is routed through a guard that aborts the request when the host is blocked. If the aborted request is the document, the shot is stored as `Private address`.
 

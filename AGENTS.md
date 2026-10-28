@@ -15,7 +15,7 @@ This is a single Uvicorn process with SQLite, an in-process scheduler, and local
 | HTTP probes, vantages, crawl, screenshots, registration | [docs/check-pipeline.md](docs/check-pipeline.md) | [app/checks/](app/checks/) |
 | Auth, CSRF, SSRF, cookies, proxies | [docs/security.md](docs/security.md) | [app/safety.py](app/safety.py), [app/routes/pages.py](app/routes/pages.py), [app/config.py](app/config.py) |
 | RDAP, WHOIS, proxies, what is not called | [docs/external-services.md](docs/external-services.md) | [app/checks/registration.py](app/checks/registration.py), [app/domain_parser.py](app/domain_parser.py) |
-| Ubuntu launcher, Docker, environment, data directory, version hooks | [docs/operations.md](docs/operations.md) | [launch.py](launch.py), [Dockerfile](Dockerfile), [docker-compose.yml](docker-compose.yml), [pyproject.toml](pyproject.toml) |
+| Ubuntu launcher, environment, data directory, version hooks | [docs/operations.md](docs/operations.md) | [launch.py](launch.py), [pyproject.toml](pyproject.toml) |
 | Pages, HTMX, status labels | [docs/ui.md](docs/ui.md) | [app/templates/](app/templates/), [app/presentation.py](app/presentation.py), [app/templating.py](app/templating.py) |
 | Later work, one item at a time | [docs/backlog.md](docs/backlog.md) | The files named in that item |
 
