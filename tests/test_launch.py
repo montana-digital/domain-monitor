@@ -4,7 +4,12 @@ import pytest
 
 from launch import (
     DEPS_STAMP_NAME,
+    CHROMIUM_STAMP_NAME,
+    DOWNLOAD_IDLE_TIMEOUT,
     apt_lock_busy,
+    apply_download_timeout,
+    browser_download_interrupted,
+    chromium_download_needed,
     chromium_present,
     chromium_ready,
     needs_pip_install,
@@ -163,3 +168,28 @@ def test_apt_lock_frontend_is_retryable():
     busy = "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1000 (packagekitd)"
     assert apt_lock_busy(busy)
     assert not apt_lock_busy("E: Unable to locate package python3.13-venv")
+
+
+def test_browser_download_reset_is_retryable():
+    assert browser_download_interrupted("Error: read ECONNRESET")
+    assert browser_download_interrupted("socket hang up")
+    assert not browser_download_interrupted("Chromium 131.0 is already installed")
+
+
+def test_download_timeout_is_applied_only_when_unset():
+    missing: dict[str, str] = {}
+    apply_download_timeout(missing)
+    assert missing["PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT"] == DOWNLOAD_IDLE_TIMEOUT
+    chosen = {"PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT": "1000"}
+    apply_download_timeout(chosen)
+    assert chosen["PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT"] == "1000"
+
+
+def test_partial_chromium_is_downloaded_again(tmp_path: Path):
+    binary = tmp_path / "chromium-1208" / "chrome-linux64" / "chrome"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"")
+    assert chromium_download_needed(tmp_path, repair=False)
+    (tmp_path / CHROMIUM_STAMP_NAME).write_text("ok\n", encoding="utf-8")
+    assert not chromium_download_needed(tmp_path, repair=False)
+    assert chromium_download_needed(tmp_path, repair=True)

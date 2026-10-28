@@ -27,8 +27,12 @@ PYPROJECT = ROOT / "pyproject.toml"
 UNIT_PATH = Path("/etc/systemd/system/domain-monitor.service")
 MIN_PYTHON = (3, 12)
 DEPS_STAMP_NAME = ".system-deps"
+CHROMIUM_STAMP_NAME = ".chromium-ok"
 APT_LOCK_ATTEMPTS = 6
 APT_LOCK_WAIT_SECONDS = 10
+DOWNLOAD_ATTEMPTS = 5
+DOWNLOAD_WAITS = (5, 10, 20, 40)
+DOWNLOAD_IDLE_TIMEOUT = "600000"
 RUNTIME_IMPORTS = ("fastapi", "uvicorn", "playwright")
 CHROMIUM_EXECUTABLES = (
     Path("chrome-linux64") / "chrome",
@@ -200,10 +204,33 @@ def have_root() -> bool:
     return geteuid is not None and geteuid() == 0
 
 
+def apply_download_timeout(env: dict[str, str]) -> None:
+    if not env.get("PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT"):
+        env["PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT"] = DOWNLOAD_IDLE_TIMEOUT
+
+
 def browser_env() -> dict[str, str]:
     env = os.environ.copy()
     env["PLAYWRIGHT_BROWSERS_PATH"] = str(BROWSERS)
+    apply_download_timeout(env)
     return env
+
+
+def browser_download_interrupted(text: str) -> bool:
+    lowered = text.lower()
+    markers = ("econnreset", "etimedout", "econnrefused", "eai_again", "socket hang up")
+    return any(marker in lowered for marker in markers)
+
+
+def download_wait_seconds(attempt: int) -> int:
+    index = min(max(attempt, 1), len(DOWNLOAD_WAITS)) - 1
+    return DOWNLOAD_WAITS[index]
+
+
+def chromium_download_needed(browsers: Path, repair: bool) -> bool:
+    if repair or not chromium_present(browsers):
+        return True
+    return not (browsers / CHROMIUM_STAMP_NAME).is_file()
 
 
 def venv_apt_package(version: tuple[int, ...]) -> str:
@@ -233,10 +260,11 @@ def apt_lock_busy(text: str) -> bool:
     return "lock-frontend" in text
 
 
-def run_showing(argv: list[str]) -> tuple[int, str]:
+def run_showing(argv: list[str], env: dict[str, str] | None = None) -> tuple[int, str]:
     process = subprocess.Popen(
         argv,
         cwd=ROOT,
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -377,16 +405,33 @@ def mark_chromium_deps(browsers: Path) -> None:
     (browsers / DEPS_STAMP_NAME).write_text("ok\n", encoding="utf-8")
 
 
+def mark_chromium_download(browsers: Path) -> None:
+    browsers.mkdir(parents=True, exist_ok=True)
+    (browsers / CHROMIUM_STAMP_NAME).write_text("ok\n", encoding="utf-8")
+
+
+def install_chromium_browser() -> None:
+    argv = [str(venv_python()), "-m", "playwright", "install", "chromium"]
+    env = browser_env()
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        code, output = run_showing(argv, env)
+        if code == 0:
+            return
+        if browser_download_interrupted(output) and attempt < DOWNLOAD_ATTEMPTS:
+            wait = download_wait_seconds(attempt)
+            say(f"The browser download was reset. Trying again in {wait} seconds.")
+            time.sleep(wait)
+            continue
+        raise subprocess.CalledProcessError(code, argv)
+
+
 def ensure_chromium(repair: bool) -> None:
-    if repair or not chromium_present(BROWSERS):
+    if chromium_download_needed(BROWSERS, repair):
+        say("Chromium is a large download and can take a while.")
         say("Installing Chromium into .playwright.")
         BROWSERS.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            [str(venv_python()), "-m", "playwright", "install", "chromium"],
-            cwd=ROOT,
-            env=browser_env(),
-            check=True,
-        )
+        install_chromium_browser()
+        mark_chromium_download(BROWSERS)
     if repair or not (BROWSERS / DEPS_STAMP_NAME).is_file():
         say("Installing Chromium system libraries.")
         run_as_root(
