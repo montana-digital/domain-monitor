@@ -1,5 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="8" fill="#1c2824"/>
-  <circle cx="16" cy="16" r="5" fill="#8fd0c4"/>
-  <circle cx="16" cy="16" r="9" fill="none" stroke="#d7ebe4" stroke-width="2"/>
+  <defs>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="0.45" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="sweep" gradientUnits="userSpaceOnUse" x1="16" y1="16" x2="24.27" y2="23.79">
+      <stop offset="0%" stop-color="#f4fffc"/>
+      <stop offset="22%" stop-color="#6ff6ea" stop-opacity="0.92"/>
+      <stop offset="62%" stop-color="#8eb6ff" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.08"/>
+    </linearGradient>
+    <radialGradient id="hub" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="35%" stop-color="#7dfff2"/>
+      <stop offset="100%" stop-color="#3ef6e0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g filter="url(#glow)" fill="none" stroke-linecap="butt">
+    <circle cx="16" cy="16" r="12.2" stroke="#3dffe8" stroke-width="1.15"/>
+    <circle cx="16" cy="16" r="9.15" stroke="#9a6bff" stroke-width="0.9"/>
+    <circle cx="16" cy="16" r="6.1" stroke="#5eead4" stroke-width="0.8"/>
+    <circle cx="16" cy="16" r="3.15" stroke="#b794f6" stroke-width="0.7"/>
+    <path stroke="#7dfff2" stroke-width="0.7" d="M16 3.8V28.2M3.8 16H28.2"/>
+    <path d="M16 16 L21.55 26.44 A11.85 11.85 0 0 0 26.98 20.44 Z" fill="#b9a6ff" opacity="0.22" stroke="none"/>
+    <path d="M16 16 L22.41 25.5 A11.45 11.45 0 0 0 25.92 21.73 Z" fill="url(#sweep)" stroke="none"/>
+    <path d="M16.41 16.61 L22.41 25.5" stroke="#f3fffc" stroke-width="0.7" stroke-linecap="round"/>
+  </g>
+  <circle cx="16" cy="16" r="1.7" fill="url(#hub)"/>
+  <circle cx="16" cy="16" r="0.7" fill="#f4fffc"/>
 </svg>

@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">Domain Monitor</title>
+  <defs>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="text-glow" x="-30%" y="-80%" width="160%" height="260%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="1.15" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="sweep" gradientUnits="userSpaceOnUse" x1="360" y1="200" x2="450.73" y2="284.57">
+      <stop offset="0%" stop-color="#f4fffc"/>
+      <stop offset="22%" stop-color="#6ff6ea" stop-opacity="0.92"/>
+      <stop offset="62%" stop-color="#8eb6ff" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.08"/>
+    </linearGradient>
+    <radialGradient id="hub" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="35%" stop-color="#7dfff2"/>
+      <stop offset="100%" stop-color="#3ef6e0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <g filter="url(#glow)">
+    <g fill="none" stroke-linecap="butt">
+      <circle cx="360" cy="200" r="132" stroke="#3dffe8" stroke-width="2.4"/>
+      <circle cx="360" cy="200" r="99" stroke="#9a6bff" stroke-width="1.8"/>
+      <circle cx="360" cy="200" r="66" stroke="#5eead4" stroke-width="1.6"/>
+      <circle cx="360" cy="200" r="34" stroke="#b794f6" stroke-width="1.5"/>
+      <path stroke="#7dfff2" stroke-width="1.35" d="M360 68V332M228 200H492"/>
+    </g>
+    <path d="M360 200 L420.09 313.01 A128 128 0 0 0 478.68 247.95 Z" fill="#b9a6ff" opacity="0.22"/>
+    <path d="M360 200 L429.34 302.8 A124 124 0 0 0 467.39 262 Z" fill="url(#sweep)"/>
+    <path d="M364.47 206.63 L429.34 302.8" fill="none" stroke="#f3fffc" stroke-width="1.7" stroke-linecap="round"/>
+  </g>
+
+  <circle cx="360" cy="200" r="16" fill="url(#hub)"/>
+  <circle cx="360" cy="200" r="4.5" fill="#f4fffc"/>
+
+  <g filter="url(#text-glow)" font-family="Segoe UI, system-ui, sans-serif" font-size="15" font-weight="600" letter-spacing="0.16em">
+    <text x="36" y="112" fill="#4ef3df">SCAN: ACTIVE</text>
+    <g fill="none" stroke="#4ef3df" stroke-width="1.7" stroke-linecap="round">
+      <path d="M40 128 l13 -6.5"/>
+      <path d="M58 128 l13 -6.5"/>
+      <path d="M76 128 l13 -6.5"/>
+    </g>
+    <text x="528" y="318" fill="#c4b5fd">SYNC: 0.4 THz</text>
+    <g fill="none" stroke="#c4b5fd" stroke-width="1.7" stroke-linecap="round">
+      <path d="M612 294 l13 -6.5"/>
+      <path d="M630 294 l13 -6.5"/>
+      <path d="M648 294 l13 -6.5"/>
+    </g>
+  </g>
+</svg>

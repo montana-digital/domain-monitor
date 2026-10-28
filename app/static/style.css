@@ -158,6 +158,12 @@ h3 { font-size: 1.05rem; }
   letter-spacing: -0.01em;
 }
 .brand:hover { color: var(--tn-text-primary); }
+.brand-mark {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
+  margin-right: 0.4rem;
+}
 
 .cursor {
   display: inline-block;
