@@ -15,7 +15,11 @@ COPY app ./app
 RUN pip install --no-cache-dir . \
     && playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright \
-    && mkdir -p /data
+    && useradd --create-home --uid 1000 --user-group monitor \
+    && mkdir -p /data \
+    && chown monitor:monitor /data
+
+USER monitor
 
 EXPOSE 8000
 

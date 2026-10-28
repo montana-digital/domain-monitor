@@ -4,6 +4,7 @@ import os
 from urllib.parse import urlsplit, unquote
 
 from app.checks.agents import user_agent
+from app.checks.pin_proxy import start_pin_proxy
 from app.checks.types import UNEXPECTED, Shot
 from app.notices import notices
 from app.safety import public_hostname_error
@@ -60,10 +61,20 @@ async def capture_views(url: str, profiles: list[str], proxy_url: str | None) ->
             notices.browser_error = message
             return [Shot(profile, error=f"Browser unavailable: {message}") for profile in profiles]
         notices.browser_error = None
-        shots: list[Shot] = []
-        for profile in profiles:
-            shots.append(await _one(browser, url, profile, proxy_url))
-        return shots
+        pin_server = None
+        proxy_config = _playwright_proxy(proxy_url)
+        try:
+            if proxy_config is None:
+                pin_server, pin_port = await start_pin_proxy()
+                proxy_config = {"server": f"http://127.0.0.1:{pin_port}"}
+            shots: list[Shot] = []
+            for profile in profiles:
+                shots.append(await _one(browser, url, profile, proxy_config))
+            return shots
+        finally:
+            if pin_server is not None:
+                pin_server.close()
+                await pin_server.wait_closed()
 
 
 async def shutdown_browser() -> None:
@@ -102,7 +113,7 @@ async def _launch():
     return _browser
 
 
-async def _one(browser, url: str, profile: str, proxy_url: str | None) -> Shot:
+async def _one(browser, url: str, profile: str, proxy_config: dict | None) -> Shot:
     context = None
     cache: dict[str, str | None] = {}
     document_blocked = False
@@ -111,7 +122,7 @@ async def _one(browser, url: str, profile: str, proxy_url: str | None) -> Shot:
             user_agent=user_agent(profile),
             viewport=_VIEWPORTS.get(profile, _VIEWPORTS["desktop"]),
             ignore_https_errors=True,
-            proxy=_playwright_proxy(proxy_url),
+            proxy=proxy_config,
         )
         page = await context.new_page()
 

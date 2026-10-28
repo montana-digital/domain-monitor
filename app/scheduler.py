@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,19 +21,19 @@ _scheduler: AsyncIOScheduler | None = None
 
 async def tick() -> None:
     try:
-        ids = due_monitor_ids()
+        ids = await asyncio.to_thread(due_monitor_ids)
     except Exception:
         logger.exception("Could not list due monitors")
         ids = []
     queue_ids(ids, try_enqueue)
     try:
-        lookups = registration_due_ids()
+        lookups = await asyncio.to_thread(registration_due_ids)
     except Exception:
         logger.exception("Could not list registration lookups")
         lookups = []
     queue_ids(lookups, try_enqueue_registration)
     try:
-        maybe_retain()
+        await asyncio.to_thread(maybe_retain)
     except Exception:
         logger.exception("Retention failed")
     notices.last_tick = utcnow()
@@ -40,8 +41,6 @@ async def tick() -> None:
 
 def start_scheduler() -> None:
     global _scheduler
-    import asyncio
-
     scheduler = AsyncIOScheduler()
     scheduler.add_job(tick, "interval", seconds=15, id="tick", max_instances=1, coalesce=True)
     scheduler.start()

@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -37,6 +37,17 @@ def init_db(settings: Settings) -> None:
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
     Base.metadata.create_all(engine)
     ensure_settings()
+
+
+def database_ok() -> bool:
+    if engine is None:
+        return False
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
 
 
 def session_scope() -> Generator[Session, None, None]:

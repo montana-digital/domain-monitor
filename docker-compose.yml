@@ -9,5 +9,6 @@ services:
       PORT: "8000"
       # DOMAIN_MONITOR_PASSWORD: set-a-password
     volumes:
+      # The image runs as uid 1000. This directory must be writable by that user.
       - ./data:/data
     restart: unless-stopped

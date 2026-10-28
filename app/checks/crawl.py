@@ -10,7 +10,7 @@ from app.checks.agents import DESKTOP_UA
 from app.checks.http_check import PrivateTarget, classify_http_error
 from app.checks.types import CrawlResult, PageRecord
 from app.domain_parser import parse_domain
-from app.safety import public_hostname_error
+from app.checks.connect import open_client, pin_host
 
 logger = logging.getLogger(__name__)
 PAGE_CAP = 20
@@ -214,7 +214,7 @@ async def crawl_site(
 
 async def _cached_block(host: str, cache: dict[str, str | None]) -> str | None:
     if host not in cache:
-        cache[host] = await public_hostname_error(host)
+        cache[host] = await pin_host(host)
     return cache[host]
 
 
@@ -285,10 +285,9 @@ async def crawl_monitor(
         if blocked:
             raise PrivateTarget(blocked)
 
-    async with httpx.AsyncClient(
+    async with open_client(
         follow_redirects=False,
         timeout=httpx.Timeout(10.0),
-        trust_env=False,
         proxy=proxy_url,
         event_hooks={"request": [reject_private]},
     ) as client:

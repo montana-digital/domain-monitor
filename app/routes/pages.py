@@ -7,14 +7,14 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.clock import utcnow
-from app.db import session_scope
+from app.db import database_ok, session_scope
 from app.domain_parser import ALLOWED_INTERVALS, parse_csv, parse_domain
 from app.models import AppSetting, CheckEvent, Monitor, Proxy, RegistrationSnapshot
 from app.notices import notices
@@ -22,8 +22,11 @@ from app.presentation import is_overdue, safe_next, section_for
 from app.safety import parse_proxy_url, proxy_label
 from app.service import (
     delete_monitor,
+    move_next_check_if_sooner,
     recent_problems,
+    registration_failure_banners,
     running_ids,
+    stored_screenshot_path,
     try_enqueue,
     try_enqueue_registration,
 )
@@ -52,9 +55,13 @@ async def require_user(request: Request) -> None:
 router.dependencies.append(Depends(require_user))
 
 
+def _banners() -> list[str]:
+    return [*notices.banners(), *registration_failure_banners()]
+
+
 def render(request: Request, name: str, status_code: int = 200, **extra):
     context = {
-        "banners": notices.banners(),
+        "banners": _banners(),
         "flash": pop_flash(request),
         "csrf": ensure_csrf(request),
         "password_enabled": bool(request.app.state.settings.password),
@@ -109,8 +116,17 @@ def dashboard_context(session: Session) -> dict:
 
 
 @router.get("/health")
-def health() -> dict:
-    return {"status": "ok"}
+def health():
+    stalled = notices.scheduler_stalled()
+    reachable = database_ok()
+    if reachable and not stalled:
+        return {"status": "ok"}
+    body: dict[str, str] = {"status": "error"}
+    if not reachable:
+        body["database"] = "unavailable"
+    if stalled:
+        body["scheduler"] = "stalled"
+    return JSONResponse(body, status_code=503)
 
 
 @router.get("/login")
@@ -133,11 +149,23 @@ async def login_submit(request: Request):
     settings = request.app.state.settings
     if not csrf_ok(request, form):
         return render(request, "403.html", status_code=403, show_nav=False)
+    client_host = request.client.host if request.client else "unknown"
+    if notices.login_throttled(client_host):
+        return render(
+            request,
+            "login.html",
+            status_code=429,
+            show_nav=False,
+            error="Too many login attempts. Try again later.",
+            next_path=safe_next(str(form.get("next") or "/")),
+        )
     password = str(form.get("password") or "")
     expected = settings.password or ""
     if expected and hmac.compare_digest(password.encode(), expected.encode()):
+        notices.clear_login_failures(client_host)
         request.session["auth"] = True
         return RedirectResponse(safe_next(str(form.get("next") or "/")), status_code=303)
+    notices.record_login_failure(client_host)
     return render(
         request,
         "login.html",
@@ -160,7 +188,7 @@ async def logout(request: Request):
 
 @router.get("/notices")
 async def notice_fragment(request: Request):
-    return render_template(request, "notices.html", {"banners": notices.banners()})
+    return render_template(request, "notices.html", {"banners": _banners()})
 
 
 @router.get("/")
@@ -402,6 +430,7 @@ async def edit_domain(request: Request, monitor_id: int, session: Session = Depe
     monitor.use_proxy = use_proxy
     monitor.mobile_ua = mobile
     monitor.updated_at = utcnow()
+    move_next_check_if_sooner(monitor)
     session.commit()
     flash(request, "Saved.")
     return RedirectResponse(f"/domains/{monitor.id}", status_code=303)
@@ -515,17 +544,14 @@ async def screenshot_file(shot_id: int, session: Session = Depends(session_scope
     shot = session.get(Screenshot, shot_id)
     if shot is None or not shot.path:
         raise HTTPException(status_code=404, detail="This screenshot is not available.")
-    path = Path(shot.path).resolve()
-    root = (request_data_dir() / "screenshots").resolve()
-    if not path.is_relative_to(root) or not path.is_file():
+    stored = shot.path
+    path = stored_screenshot_path(stored)
+    if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="This screenshot is not available.")
+    if Path(stored).is_absolute():
+        shot.path = path.name
+        session.commit()
     return FileResponse(path, media_type="image/jpeg")
-
-
-def request_data_dir() -> Path:
-    from app.config import current
-
-    return current().data_dir
 
 
 def _monitor_fields(form) -> tuple[int, bool, bool, bool, bool, str | None]:

@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import logging
 import time
@@ -25,10 +26,15 @@ from app.notices import notices
 from app.safety import proxy_label
 
 logger = logging.getLogger(__name__)
+REGISTRATION_TIMEOUT = 30
+LOST_RESULT = "Result could not be stored."
+CHECK_LIMIT = 8
 
 _inflight: set[int] = set()
+_occupying: set[int] = set()
 _reg_inflight: set[int] = set()
 _tasks: set[asyncio.Task] = set()
+_holding_slot: contextvars.ContextVar[bool] = contextvars.ContextVar("holding_slot", default=False)
 _shutting_down = False
 _check_sem: asyncio.Semaphore | None = None
 _reg_sem: asyncio.Semaphore | None = None
@@ -40,7 +46,7 @@ def _semaphore(name: str, limit: int) -> asyncio.Semaphore:
     global _check_sem, _reg_sem, _sem_loop
     loop = asyncio.get_running_loop()
     if _sem_loop is not loop:
-        _check_sem = asyncio.Semaphore(8)
+        _check_sem = asyncio.Semaphore(CHECK_LIMIT)
         _reg_sem = asyncio.Semaphore(2)
         _sem_loop = loop
     if name == "check":
@@ -70,11 +76,14 @@ def running_ids() -> set[int]:
 def try_enqueue(monitor_id: int, trigger: str) -> bool:
     if _shutting_down or monitor_id in _inflight:
         return False
+    if trigger == "schedule" and len(_occupying) >= CHECK_LIMIT:
+        return False
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return False
     _inflight.add(monitor_id)
+    _occupying.add(monitor_id)
     task = loop.create_task(_guarded(monitor_id, trigger))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
@@ -111,7 +120,9 @@ def try_enqueue_registration(monitor_id: int, _trigger: str = "schedule") -> boo
     except RuntimeError:
         return False
     _reg_inflight.add(monitor_id)
-    loop.create_task(refresh_registration(monitor_id, already_marked=True))
+    task = loop.create_task(refresh_registration(monitor_id, already_marked=True))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
     return True
 
 
@@ -121,6 +132,43 @@ def queue_ids(ids: list[int], enqueue) -> None:
             enqueue(monitor_id, "schedule")
         except Exception:
             logger.exception("Could not queue monitor %s", monitor_id)
+
+
+def move_next_check_if_sooner(monitor: Monitor, now=None) -> None:
+    now = now or utcnow()
+    if monitor.last_checked_at is None:
+        candidate = now
+    else:
+        checked = as_utc(monitor.last_checked_at)
+        candidate = checked + timedelta(minutes=monitor.interval_minutes)
+    current = as_utc(monitor.next_check_at)
+    if current is not None and candidate < current:
+        monitor.next_check_at = candidate
+
+
+def registration_failure_banners() -> list[str]:
+    if db.SessionLocal is None:
+        return []
+    with db.SessionLocal() as session:
+        latest_id = (
+            select(func.max(RegistrationSnapshot.id).label("id"))
+            .group_by(RegistrationSnapshot.monitor_id)
+            .subquery()
+        )
+        rows = session.execute(
+            select(Monitor.hostname, RegistrationSnapshot.error)
+            .join(RegistrationSnapshot, RegistrationSnapshot.monitor_id == Monitor.id)
+            .where(
+                RegistrationSnapshot.id.in_(select(latest_id.c.id)),
+                RegistrationSnapshot.success.is_(False),
+            )
+            .order_by(Monitor.hostname)
+        ).all()
+    lines = []
+    for hostname, error in rows:
+        detail = error or "Registration lookup failed."
+        lines.append(f"Registration lookup failed for {hostname}: {detail}")
+    return lines
 
 
 def due_monitor_ids() -> list[int]:
@@ -136,17 +184,22 @@ def due_monitor_ids() -> list[int]:
 def registration_due_ids() -> list[int]:
     cutoff = utcnow() - timedelta(hours=24)
     with _session() as session:
-        due: list[int] = []
-        ids = list(session.scalars(select(Monitor.id)).all())
-        for monitor_id in ids:
-            latest = session.scalar(
-                select(func.max(RegistrationSnapshot.fetched_at)).where(
-                    RegistrationSnapshot.monitor_id == monitor_id
-                )
+        latest = (
+            select(
+                RegistrationSnapshot.monitor_id.label("monitor_id"),
+                func.max(RegistrationSnapshot.fetched_at).label("fetched_at"),
             )
-            if latest is None or as_utc(latest) < cutoff:
-                due.append(monitor_id)
-        return due
+            .group_by(RegistrationSnapshot.monitor_id)
+            .subquery()
+        )
+        rows = session.execute(
+            select(Monitor.id, latest.c.fetched_at).outerjoin(latest, latest.c.monitor_id == Monitor.id)
+        ).all()
+    due: list[int] = []
+    for monitor_id, fetched_at in rows:
+        if fetched_at is None or as_utc(fetched_at) < cutoff:
+            due.append(monitor_id)
+    return due
 
 
 def stagger_due() -> None:
@@ -230,6 +283,15 @@ def retain_screenshots() -> None:
             if _unlink(shot.path):
                 shot.path = None
                 shot.error = "Image removed by retention."
+        old_events = session.scalars(
+            select(CheckEvent)
+            .where(CheckEvent.finished_at.is_not(None), CheckEvent.finished_at < cutoff)
+            .options(selectinload(CheckEvent.screenshots))
+        ).all()
+        for event in old_events:
+            if any(shot.path and not _unlink(shot.path) for shot in event.screenshots):
+                continue
+            session.delete(event)
         commit_with_retry(session)
 
 
@@ -259,7 +321,10 @@ async def refresh_registration(monitor_id: int, lookup=None, already_marked: boo
                 return
             call = lookup or _real_lookup
             try:
-                record = await asyncio.to_thread(call, domain)
+                record = await asyncio.wait_for(asyncio.to_thread(call, domain), REGISTRATION_TIMEOUT)
+            except TimeoutError:
+                logger.warning("Registration timed out for %s", domain)
+                record = RegistrationRecord(False, "Registration lookup timed out.")
             except Exception:
                 logger.exception("Registration crashed for %s", domain)
                 record = RegistrationRecord(False, UNEXPECTED)
@@ -295,20 +360,41 @@ def save_snapshot(monitor_id: int, record: RegistrationRecord) -> None:
         for row in stale:
             session.delete(row)
         commit_with_retry(session)
-    if record.success:
-        notices.registration_error = None
-    else:
-        notices.registration_error = record.error or "Registration lookup failed."
 
 
 async def _guarded(monitor_id: int, trigger: str) -> None:
+    sem = _semaphore("check", CHECK_LIMIT)
+    token = _holding_slot.set(False)
     try:
-        async with _semaphore("check", 8):
+        await sem.acquire()
+        _holding_slot.set(True)
+        try:
             await _execute_and_save(monitor_id, trigger)
+        finally:
+            if _holding_slot.get():
+                sem.release()
+                _holding_slot.set(False)
     except Exception:
         logger.exception("Monitor %s crashed", monitor_id)
     finally:
+        _holding_slot.reset(token)
         _inflight.discard(monitor_id)
+        _occupying.discard(monitor_id)
+
+
+async def _capture_outside_slot(capture, monitor_id: int, url: str, profiles: list[str], proxy_url: str | None):
+    if not _holding_slot.get():
+        return await capture(url, profiles, proxy_url)
+    sem = _semaphore("check", CHECK_LIMIT)
+    _occupying.discard(monitor_id)
+    sem.release()
+    _holding_slot.set(False)
+    try:
+        return await capture(url, profiles, proxy_url)
+    finally:
+        _occupying.add(monitor_id)
+        await sem.acquire()
+        _holding_slot.set(True)
 
 
 async def _execute_and_save(monitor_id: int, trigger: str, *, probe=None, capture=None, crawl=None) -> None:
@@ -316,6 +402,11 @@ async def _execute_and_save(monitor_id: int, trigger: str, *, probe=None, captur
     if spec is None:
         return
     started = utcnow()
+    capture_call = capture or capture_views
+
+    async def releasing_capture(url, profiles, proxy_url):
+        return await _capture_outside_slot(capture_call, monitor_id, url, profiles, proxy_url)
+
     try:
         outcome = await execute_check(
             hostname=spec.hostname,
@@ -326,7 +417,7 @@ async def _execute_and_save(monitor_id: int, trigger: str, *, probe=None, captur
             mobile=spec.mobile,
             proxies=spec.proxies if spec.use_proxy else [],
             probe=probe or HttpProber().probe,
-            capture=capture or capture_views,
+            capture=releasing_capture,
             crawl_site=crawl or crawl_monitor,
         )
     except Exception:
@@ -367,6 +458,7 @@ def _load_spec(monitor_id: int) -> MonitorSpec | None:
 def _save_outcome(spec: MonitorSpec, trigger: str, started, outcome: CheckOutcome) -> None:
     for _attempt in range(2):
         written: list[str] = []
+        lost = False
         with _session() as session:
             try:
                 monitor = session.get(Monitor, spec.id)
@@ -481,8 +573,52 @@ def _save_outcome(spec: MonitorSpec, trigger: str, started, outcome: CheckOutcom
                     _unlink(path)
                 if _attempt == 1:
                     logger.exception("Could not save the check for %s", spec.hostname)
-                    return
-                time.sleep(0.2)
+                    lost = True
+                else:
+                    time.sleep(0.2)
+        if lost:
+            _save_lost_outcome(spec, trigger, started, outcome)
+            return
+
+
+def _save_lost_outcome(spec: MonitorSpec, trigger: str, started, outcome: CheckOutcome) -> None:
+    finished = utcnow()
+    error = LOST_RESULT if not outcome.error else f"{outcome.error} {LOST_RESULT}"
+    try:
+        with _session() as session:
+            monitor = session.get(Monitor, spec.id)
+            if monitor is None:
+                return
+            session.add(
+                CheckEvent(
+                    monitor_id=monitor.id,
+                    trigger=trigger,
+                    started_at=started,
+                    finished_at=finished,
+                    status_code=outcome.status_code,
+                    error=error,
+                    partial=outcome.partial,
+                    partial_reason=outcome.partial_reason,
+                    scheme=outcome.scheme,
+                    screenshot_outcome=outcome.screenshot_outcome,
+                    screenshot_error=outcome.screenshot_error,
+                    crawl_outcome=outcome.crawl_outcome,
+                    crawl_error=outcome.crawl_error,
+                    crawl_note=outcome.crawl_note,
+                    crawl_saved=outcome.crawl_saved,
+                    crawl_failed=outcome.crawl_failed,
+                )
+            )
+            monitor.last_checked_at = finished
+            monitor.last_status_code = outcome.status_code
+            monitor.last_error = error
+            monitor.last_partial = outcome.partial
+            monitor.last_partial_reason = outcome.partial_reason
+            monitor.last_scheme = outcome.scheme
+            monitor.next_check_at = finished + timedelta(minutes=monitor.interval_minutes)
+            commit_with_retry(session)
+    except OperationalError:
+        logger.exception("Could not record the lost check for %s", spec.hostname)
 
 
 def _save_crash(spec: MonitorSpec, trigger: str, started) -> None:
@@ -524,19 +660,41 @@ def _real_lookup(domain: str) -> RegistrationRecord:
     return lookup_registration(domain, rdap=rdap_lookup, whois_lookup=whois_lookup)
 
 
+def stored_screenshot_path(stored: str | None) -> Path | None:
+    if not stored:
+        return None
+    root = (current().data_dir / "screenshots").resolve()
+    raw = Path(stored)
+    if raw.is_absolute():
+        try:
+            resolved = raw.resolve()
+        except OSError:
+            return None
+    else:
+        if raw.name != str(raw) or raw.name in {"", ".", ".."}:
+            return None
+        resolved = (root / raw.name).resolve()
+    if not resolved.is_relative_to(root):
+        return None
+    return resolved
+
+
 def _write_shot(event_id: int, viewport: str, data: bytes) -> str:
     directory = current().data_dir / "screenshots"
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{event_id}-{viewport}.jpg"
-    path.write_bytes(data)
-    return str(path)
+    name = f"{event_id}-{viewport}.jpg"
+    (directory / name).write_bytes(data)
+    return name
 
 
 def _unlink(path: str | None) -> bool:
     if not path:
         return True
+    target = stored_screenshot_path(path)
+    if target is None:
+        return True
     try:
-        Path(path).unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
         return True
     except OSError:
         logger.warning("Could not delete screenshot %s", path)

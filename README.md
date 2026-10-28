@@ -4,9 +4,41 @@ Domain Monitor is a single-process Python app for watching web domains from a Li
 
 Checks run from the machine where the app is installed. A green status is a final `2xx` response after redirects.
 
+## Design record
+
+The documents in [docs/README.md](docs/README.md) describe the architecture, data model, check pipeline, security, external services, operations, and UI. [AGENTS.md](AGENTS.md) points a later change at the right document.
+
+## Run on Ubuntu
+
+From the repository directory, with Python 3.12 or newer:
+
+```bash
+python3 launch.py
+```
+
+The first run creates `.venv`, installs this checkout, and downloads Chromium into `.playwright`. It may ask for a sudo password to install `python3-venv` and the libraries Chromium needs. Later runs start the server.
+
+Open `http://127.0.0.1:8000`. The database and screenshots are stored in `./data`.
+
+Set a password before you expose the port beyond localhost:
+
+```bash
+DOMAIN_MONITOR_PASSWORD=choose-a-long-password python3 launch.py
+```
+
+`HOST` defaults to `127.0.0.1`. Set `HOST=0.0.0.0` only when other machines must reach the port, and keep the password set. `python3 launch.py --repair` repeats the package and Chromium install.
+
+To keep the process up after logout:
+
+```bash
+python3 launch.py --service
+```
+
+That writes a systemd unit which runs `.venv/bin/python -m app.main` as the user who installed it. Data stays in `./data`, and Chromium stays in `.playwright`. Starting the service does not install packages again.
+
 ## Run with Docker
 
-Docker is the supported install. The image includes Chromium, which screenshots need.
+Docker is optional. The image includes Chromium, which screenshots need.
 
 ```bash
 docker compose up --build -d
@@ -21,44 +53,7 @@ Set a password before you expose the port beyond localhost:
 DOMAIN_MONITOR_PASSWORD=choose-a-long-password
 ```
 
-The container runs as root so it can write the data volume and start Chromium. Chromium is launched with `--no-sandbox` in that case.
-
-## Run on Debian or Ubuntu without Docker
-
-Install Python 3.12 and the system packages Playwright needs, then:
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install .
-playwright install --with-deps chromium
-```
-
-`playwright install --with-deps` needs permission to install operating system libraries. Use a systemd unit when the process should stay up:
-
-```ini
-[Unit]
-Description=Domain Monitor
-After=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/domain-monitor
-Environment=DATA_DIR=/var/lib/domain-monitor
-Environment=HOST=127.0.0.1
-Environment=PORT=8000
-Environment=DOMAIN_MONITOR_PASSWORD=choose-a-long-password
-ExecStart=/opt/domain-monitor/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Change `--host` to `0.0.0.0` only when the port should be reachable from other machines, and keep the password set or put the app behind a reverse proxy. The process default for `HOST` is `127.0.0.1`. Docker sets `0.0.0.0` itself.
-
-Create `/var/lib/domain-monitor` and make it writable by the service user before starting the unit.
+The container runs as uid 1000. `./data` must be writable by that user. Chromium keeps its sandbox. Set `DOMAIN_MONITOR_HTTPS_ONLY=1` only when TLS ends at this process.
 
 ## Local development
 

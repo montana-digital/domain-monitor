@@ -68,15 +68,17 @@ def test_crawl_does_not_follow_a_redirect_off_the_registrable_domain(monkeypatch
     transport = httpx.MockTransport(handler)
     real_client = httpx.AsyncClient
 
-    def client_factory(*args, **kwargs):
+    def client_factory(**kwargs):
+        kwargs.pop("proxy", None)
         kwargs["transport"] = transport
-        return real_client(*args, **kwargs)
+        kwargs.setdefault("trust_env", False)
+        return real_client(**kwargs)
 
     async def allow(_host):
         return None
 
-    monkeypatch.setattr("app.checks.crawl.httpx.AsyncClient", client_factory)
-    monkeypatch.setattr("app.checks.crawl.public_hostname_error", allow)
+    monkeypatch.setattr("app.checks.crawl.open_client", client_factory)
+    monkeypatch.setattr("app.checks.crawl.pin_host", allow)
     result = asyncio.run(crawl_monitor("https://www.bbc.co.uk/", "bbc.co.uk", None, time.monotonic() + 30))
     assert all(host != "account.bbc.com" for host, _path in requested)
     assert ("news.bbc.co.uk", "/story") in requested

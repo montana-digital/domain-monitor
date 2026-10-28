@@ -5,8 +5,8 @@ from collections.abc import Awaitable, Callable
 import httpx
 
 from app.checks.agents import user_agent
+from app.checks.connect import open_client, pin_host
 from app.checks.types import HttpResult
-from app.safety import public_hostname_error
 
 logger = logging.getLogger(__name__)
 RETRY_STATUSES = {429, 503}
@@ -68,7 +68,7 @@ def classify_http_error(exc: Exception) -> str:
 
 class HttpProber:
     async def probe(self, hostname: str, profile: str, proxy_url: str | None) -> HttpResult:
-        blocked = await public_hostname_error(hostname)
+        blocked = await pin_host(hostname)
         if blocked:
             return HttpResult(error=blocked)
         agent = user_agent(profile)
@@ -86,16 +86,15 @@ async def send_once(url: str, agent: str, proxy_url: str | None, scheme: str) ->
         host = request.url.host
         if not host:
             return
-        error = await public_hostname_error(host)
+        error = await pin_host(host)
         if error:
             raise PrivateTarget(error)
 
     try:
-        async with httpx.AsyncClient(
+        async with open_client(
             follow_redirects=True,
             max_redirects=10,
             timeout=httpx.Timeout(20.0),
-            trust_env=False,
             proxy=proxy_url,
             event_hooks={"request": [reject_private]},
         ) as client:

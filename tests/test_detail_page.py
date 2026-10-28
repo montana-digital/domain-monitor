@@ -1,4 +1,5 @@
 import re
+import shutil
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -8,7 +9,8 @@ from app import db
 from app.clock import utcnow
 from app.config import Settings
 from app.main import create_app
-from app.models import CheckAttempt, CheckEvent, Monitor, Screenshot
+from app.models import CheckAttempt, CheckEvent, CrawlPage, Monitor, Screenshot
+from app.service import retain_screenshots
 from app.presentation import format_dt, profiles_used, screenshot_mark
 
 
@@ -213,3 +215,173 @@ def test_detail_page_folds_are_closed_and_summarize_the_check(tmp_path):
         assert confirm.status_code == 200
         assert '<details class="fold danger-zone" open>' in confirm.text
         assert not re.search(r'<details class="fold event"[^>]*\bopen\b', confirm.text)
+
+
+def test_retention_drops_old_events_and_keeps_recent_history(tmp_path):
+    app = create_app(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
+    now = utcnow()
+    with TestClient(app) as client:
+        with db.SessionLocal() as session:
+            monitor = Monitor(
+                hostname="history.example.com",
+                registrable_domain="example.com",
+                interval_minutes=5,
+                screenshot_enabled=True,
+                crawl_enabled=False,
+                use_proxy=False,
+                mobile_ua=False,
+                created_at=now,
+                updated_at=now,
+                last_partial=False,
+            )
+            session.add(monitor)
+            session.flush()
+            old = CheckEvent(
+                monitor_id=monitor.id,
+                trigger="schedule",
+                started_at=now - timedelta(days=40),
+                finished_at=now - timedelta(days=40),
+                error="OLD-CHECK-GONE",
+                partial=False,
+                screenshot_outcome="succeeded",
+                crawl_outcome="skipped",
+            )
+            recent = CheckEvent(
+                monitor_id=monitor.id,
+                trigger="schedule",
+                started_at=now,
+                finished_at=now,
+                status_code=200,
+                scheme="https",
+                partial=False,
+                screenshot_outcome="succeeded",
+                crawl_outcome="skipped",
+            )
+            session.add_all([old, recent])
+            session.flush()
+            session.add(
+                CrawlPage(
+                    check_event_id=old.id,
+                    url="https://history.example.com/old",
+                    depth=1,
+                    status_code=200,
+                    title="Old page",
+                )
+            )
+            old_file = tmp_path / "screenshots" / "old.jpg"
+            recent_file = tmp_path / "screenshots" / "recent.jpg"
+            old_file.write_bytes(b"old-image")
+            recent_file.write_bytes(b"new-image")
+            session.add(
+                Screenshot(
+                    check_event_id=old.id,
+                    viewport="desktop",
+                    path="old.jpg",
+                    created_at=now - timedelta(days=40),
+                )
+            )
+            session.add(
+                Screenshot(
+                    check_event_id=recent.id,
+                    viewport="desktop",
+                    path="recent.jpg",
+                    created_at=now,
+                )
+            )
+            session.commit()
+            monitor_id = monitor.id
+            old_id = old.id
+        retain_screenshots()
+        page = client.get(f"/domains/{monitor_id}")
+        assert page.status_code == 200
+        assert "OLD-CHECK-GONE" not in page.text
+        assert ">200<" in page.text
+        assert not old_file.exists()
+        assert recent_file.is_file()
+        with db.SessionLocal() as session:
+            assert session.get(CheckEvent, old_id) is None
+            assert session.query(CrawlPage).count() == 0
+            remaining = session.query(CheckEvent).filter(CheckEvent.monitor_id == monitor_id).count()
+            assert remaining == 1
+
+
+def test_screenshot_paths_follow_the_data_directory(tmp_path):
+    app = create_app(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
+    now = utcnow()
+    with TestClient(app) as client:
+        with db.SessionLocal() as session:
+            monitor = Monitor(
+                hostname="shots.example.com",
+                registrable_domain="example.com",
+                interval_minutes=5,
+                screenshot_enabled=True,
+                crawl_enabled=False,
+                use_proxy=False,
+                mobile_ua=False,
+                created_at=now,
+                updated_at=now,
+                last_partial=False,
+            )
+            session.add(monitor)
+            session.flush()
+            event = CheckEvent(
+                monitor_id=monitor.id,
+                trigger="manual",
+                started_at=now,
+                finished_at=now,
+                status_code=200,
+                partial=False,
+                screenshot_outcome="succeeded",
+                crawl_outcome="skipped",
+            )
+            session.add(event)
+            session.flush()
+            relative = tmp_path / "screenshots" / "kept.jpg"
+            legacy = tmp_path / "screenshots" / "legacy.jpg"
+            outside = tmp_path / "secret.jpg"
+            relative.write_bytes(b"kept-image")
+            legacy.write_bytes(b"legacy-image")
+            outside.write_bytes(b"secret-image")
+            kept = Screenshot(check_event_id=event.id, viewport="desktop", path="kept.jpg", created_at=now)
+            absolute = Screenshot(
+                check_event_id=event.id,
+                viewport="mobile",
+                path=str(legacy.resolve()),
+                created_at=now,
+            )
+            escaped = Screenshot(
+                check_event_id=event.id,
+                viewport="desktop",
+                path=str(outside.resolve()),
+                created_at=now,
+            )
+            session.add_all([kept, absolute, escaped])
+            session.commit()
+            kept_id = kept.id
+            absolute_id = absolute.id
+            escaped_id = escaped.id
+        kept_response = client.get(f"/screenshots/{kept_id}")
+        assert kept_response.status_code == 200
+        assert kept_response.content == b"kept-image"
+        rewritten = client.get(f"/screenshots/{absolute_id}")
+        assert rewritten.status_code == 200
+        assert rewritten.content == b"legacy-image"
+        blocked = client.get(f"/screenshots/{escaped_id}")
+        assert blocked.status_code == 404
+        assert outside.is_file()
+        with db.SessionLocal() as session:
+            assert session.get(Screenshot, absolute_id).path == "legacy.jpg"
+            assert session.get(Screenshot, escaped_id).path == str(outside.resolve())
+
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    for name in ("monitor.db", "monitor.db-wal", "monitor.db-shm"):
+        source = tmp_path / name
+        if source.exists():
+            shutil.copy2(source, moved / name)
+    shutil.copytree(tmp_path / "screenshots", moved / "screenshots")
+    moved_app = create_app(Settings(data_dir=moved, password=None, secret_key="test-secret", start_scheduler=False))
+    with TestClient(moved_app) as client:
+        followed = client.get(f"/screenshots/{kept_id}")
+        assert followed.status_code == 200
+        assert followed.content == b"kept-image"

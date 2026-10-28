@@ -1,2 +1,3 @@
 .githooks/* text eol=lf
 scripts/version_bump.py text eol=lf
+launch.py text eol=lf

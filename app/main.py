@@ -66,7 +66,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Domain Monitor", lifespan=lifespan)
     app.state.settings = settings
     app.add_middleware(SecurityHeaders)
-    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, same_site="lax", https_only=False, max_age=60 * 60 * 24 * 14)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.secret_key,
+        same_site="lax",
+        https_only=settings.https_only,
+        max_age=60 * 60 * 24 * 14,
+    )
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
     app.add_exception_handler(LoginRequired, login_redirect)

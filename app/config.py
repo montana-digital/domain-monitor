@@ -12,6 +12,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     start_scheduler: bool = True
+    https_only: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -21,12 +22,14 @@ class Settings:
         secret = os.environ.get("DOMAIN_MONITOR_SECRET") or load_or_create_secret(data_dir)
         host = os.environ.get("HOST", "127.0.0.1")
         port = int(os.environ.get("PORT", "8000"))
+        https_only = os.environ.get("DOMAIN_MONITOR_HTTPS_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
         return cls(
             data_dir=data_dir,
             password=password,
             secret_key=secret,
             host=host,
             port=port,
+            https_only=https_only,
         )
 
 
