@@ -12,6 +12,7 @@ class RuntimeNotices:
         self.last_tick = None
         self.browser_error: str | None = None
         self.disk_error: str | None = None
+        self.registration_unavailable: str | None = None
         self.scheduler_enabled = True
         self.login_failures: dict[str, list] = {}
 
@@ -44,6 +45,8 @@ class RuntimeNotices:
 
     def banners(self) -> list[str]:
         items: list[str] = []
+        if self.registration_unavailable:
+            items.append(self.registration_unavailable)
         if self.browser_error:
             items.append(f"Screenshots are unavailable: {self.browser_error}")
         if self.disk_error:
@@ -57,6 +60,7 @@ class RuntimeNotices:
         self.last_tick = None
         self.browser_error = None
         self.disk_error = None
+        self.registration_unavailable = None
         self.scheduler_enabled = True
         self.login_failures = {}
 

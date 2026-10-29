@@ -2,7 +2,7 @@
 
 A check starts when a monitor is first saved, when someone posts Check now, or when the scheduler finds `next_check_at` due. The queue and save path are [app/service.py](../app/service.py). The ordering and deadline are [app/checks/runner.py](../app/checks/runner.py). Address refusal is [app/safety.py](../app/safety.py) and is described with the other controls in [security.md](security.md).
 
-Saving setup on an existing monitor updates the interval and the four flags. [edit_domain](../app/routes/pages.py) moves `next_check_at` only when the new interval is due sooner than the stored time. That candidate is `last_checked_at` plus the new interval, or now when the monitor has never finished a check. A longer interval leaves the stored due time alone. Check now loads the flags when the check runs, so that run uses the values just saved.
+Saving setup updates the four check flags, the watch interval, and the Watch control. Marking Watch sets the saved interval (5, 15, 30, 60, or 240 minutes; 30 when the field is empty) and a window of the saved number of days, counted from the save. A shorter interval moves the next check earlier when that interval is due sooner than `next_check_at`. A longer interval moves it to `last_checked_at` plus the new interval. Leaving Watch sets Routine at every 4 hours and moves the next check to `last_checked_at` plus 4 hours, or to now if the domain has never finished a check. The posted interval is ignored on that path. Saving a domain that is already routine does not reset its clock. Check now loads the flags when the check runs, so that run uses the values just saved. It does not change Watch or Routine by itself. A status or registration change extends the watch window and keeps the saved interval.
 
 ## Check level
 
@@ -101,7 +101,7 @@ Fragments are joined with a comma. The event is `partial` when the joined string
 
 ## Screenshots
 
-[app/checks/screenshot.py](../app/checks/screenshot.py) runs only when the monitor's screenshot flag is on. A process-wide asyncio lock serializes capture, including the browser launch. The check releases its check slot for that call and takes a slot again before the crawl and the save, so probes are not stuck behind the browser lock. A direct capture sends Chromium through a local proxy that connects to the address the safety check allowed. A capture that uses an operator proxy uses that proxy instead.
+[app/checks/screenshot.py](../app/checks/screenshot.py) runs only when the monitor's screenshot flag is on and Chromium is available. At startup the process checks that Playwright imports and that a Chromium binary exists under `.playwright` (`chrome-linux64/chrome`, `chrome-linux/chrome`, or `chrome-win/chrome.exe`). If either is missing, the flag stays saved and the screenshot outcome for that check is `skipped`. That skip is not a failed screenshot, so it does not make the check partial. A browser that is present and then fails to launch still stores `failed` and sets the screenshot banner. A process-wide asyncio lock serializes capture, including the browser launch. The check releases its check slot for that call and takes a slot again before the crawl and the save, so probes are not stuck behind the browser lock. A direct capture sends Chromium through a local proxy that connects to the address the safety check allowed. A capture that uses an operator proxy uses that proxy instead.
 
 Viewports:
 
@@ -160,7 +160,7 @@ A failed page after the homepage increments `crawl_failed` and the crawl continu
 
 ## Registration
 
-Registration is a separate job, not part of the 180-second check. It is queued when a domain is added and again when the newest snapshot for that monitor is missing or older than 24 hours. The lookup uses `registrable_domain`, so `www.bbc.co.uk` is queried as `bbc.co.uk`.
+Registration is a separate job, not part of the 180-second check. It runs only when `whoisit` and `whois` import and a one-time `whoisit.bootstrap()` connects during startup. That probe runs in a thread and waits 15 seconds. If the import fails, or the bootstrap raises or does not return in time, registration stays off for this process: the scheduler does not enqueue lookups, and adding a domain does not queue one. The detail page says registration lookups are unavailable instead of leaving the fold on Pending. WHOIS remains the per-domain fallback only while the feature is on. When it is on, a lookup is queued when a domain is added and again when the newest snapshot for that monitor is missing or older than 24 hours. The lookup uses `registrable_domain`, so `www.bbc.co.uk` is queried as `bbc.co.uk`.
 
 [app/checks/registration.py](../app/checks/registration.py) tries RDAP, then WHOIS:
 

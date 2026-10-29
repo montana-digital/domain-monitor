@@ -8,22 +8,30 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.attention import MONITOR_PAGE_SIZE, assign_attention, parse_watch_days, parse_watch_interval
+from app.capabilities import browser_available
+from app.environment import current_network, environment_facts, scrape_rows, trace_user_agent
 from app.clock import utcnow
 from app.db import database_ok, session_scope
-from app.domain_parser import ALLOWED_INTERVALS, parse_csv, parse_domain
+from app.domain_parser import parse_csv, parse_domain
 from app.models import AppSetting, CheckEvent, Monitor, Proxy, RegistrationSnapshot
 from app.notices import notices
-from app.presentation import is_overdue, safe_next, section_for
+from app.presentation import (
+    MONITOR_POLL_SECONDS,
+    NOTICE_POLL_SECONDS,
+    debug_severity,
+    is_overdue,
+    safe_next,
+    section_for,
+)
 from app.safety import parse_proxy_url, proxy_label
 from app.service import (
     delete_monitor,
-    move_next_check_if_sooner,
-    recent_problems,
     registration_failure_banners,
     running_ids,
     stored_screenshot_path,
@@ -67,6 +75,8 @@ def render(request: Request, name: str, status_code: int = 200, **extra):
         "password_enabled": bool(request.app.state.settings.password),
         "section": section_for(request.url.path),
         "show_nav": True,
+        "monitor_poll_seconds": MONITOR_POLL_SECONDS,
+        "notice_poll_seconds": NOTICE_POLL_SECONDS,
         **extra,
     }
     return render_template(request, name, context, status_code=status_code)
@@ -99,20 +109,85 @@ def pop_flash(request: Request) -> list[str]:
     return messages
 
 
-def dashboard_context(session: Session) -> dict:
+def _page_number(request: Request) -> int:
+    try:
+        return max(1, int(request.query_params.get("page") or 1))
+    except ValueError:
+        return 1
+
+
+def _list_name(request: Request) -> str:
+    return "routine" if request.query_params.get("list") == "routine" else "watch"
+
+
+def _window(total: int, page: int, size: int) -> tuple[int, int]:
+    pages = max(1, math.ceil(total / size)) if total else 1
+    return min(max(page, 1), pages), pages
+
+
+def _row(monitor: Monitor, now, inflight: set[int]) -> dict:
+    checking = monitor.id in inflight
+    return {
+        "monitor": monitor,
+        "checking": checking,
+        "overdue": is_overdue(monitor, now, checking),
+        "severity": debug_severity(monitor.last_status_code, monitor.last_error, monitor.last_checked_at),
+    }
+
+
+def dashboard_context(session: Session, request: Request) -> dict:
     now = utcnow()
     inflight = running_ids()
-    rows = []
-    for monitor in session.scalars(select(Monitor).order_by(Monitor.hostname)).all():
-        checking = monitor.id in inflight
-        rows.append(
-            {
-                "monitor": monitor,
-                "checking": checking,
-                "overdue": is_overdue(monitor, now, checking),
-            }
-        )
-    return {"rows": rows, "problems": recent_problems(session)}
+    list_name = _list_name(request)
+    attention = "routine" if list_name == "routine" else "watch"
+    total = session.scalar(select(func.count()).select_from(Monitor).where(Monitor.attention == attention)) or 0
+    page, pages = _window(total, _page_number(request), MONITOR_PAGE_SIZE)
+    order = (
+        (Monitor.quiet_since.asc().nulls_last(), Monitor.hostname.asc())
+        if attention == "routine"
+        else (Monitor.hostname.asc(),)
+    )
+    monitors = session.scalars(
+        select(Monitor)
+        .where(Monitor.attention == attention)
+        .order_by(*order)
+        .offset((page - 1) * MONITOR_PAGE_SIZE)
+        .limit(MONITOR_PAGE_SIZE)
+    ).all()
+    return {
+        "rows": [_row(monitor, now, inflight) for monitor in monitors],
+        "page": page,
+        "pages": pages,
+        "total": total,
+        "list_name": list_name,
+        "monitor_poll_seconds": MONITOR_POLL_SECONDS,
+    }
+
+
+def debug_context(session: Session, request: Request) -> dict:
+    now = utcnow()
+    inflight = running_ids()
+    problem = or_(
+        Monitor.last_status_code.is_(None),
+        Monitor.last_status_code < 200,
+        Monitor.last_status_code >= 300,
+    )
+    where = (Monitor.last_checked_at.is_not(None), problem)
+    total = session.scalar(select(func.count()).select_from(Monitor).where(*where)) or 0
+    page, pages = _window(total, _page_number(request), MONITOR_PAGE_SIZE)
+    monitors = session.scalars(
+        select(Monitor)
+        .where(*where)
+        .order_by(Monitor.last_checked_at.desc(), Monitor.hostname.asc())
+        .offset((page - 1) * MONITOR_PAGE_SIZE)
+        .limit(MONITOR_PAGE_SIZE)
+    ).all()
+    return {
+        "rows": [_row(monitor, now, inflight) for monitor in monitors],
+        "page": page,
+        "pages": pages,
+        "total": total,
+    }
 
 
 @router.get("/health")
@@ -193,12 +268,17 @@ async def notice_fragment(request: Request):
 
 @router.get("/")
 async def monitors(request: Request, session: Session = Depends(session_scope)):
-    return render(request, "monitors.html", **dashboard_context(session))
+    return render(request, "monitors.html", **dashboard_context(session, request))
 
 
 @router.get("/fragment/monitors")
 async def monitors_fragment(request: Request, session: Session = Depends(session_scope)):
-    return render_template(request, "monitors_live.html", dashboard_context(session))
+    return render_template(request, "monitors_live.html", dashboard_context(session, request))
+
+
+@router.get("/debug")
+async def debug_page(request: Request, session: Session = Depends(session_scope)):
+    return render(request, "debug.html", **debug_context(session, request))
 
 
 @router.get("/domains/new")
@@ -212,14 +292,14 @@ async def add_domain(request: Request, session: Session = Depends(session_scope)
     if not csrf_ok(request, form):
         return render(request, "403.html", status_code=403)
     parsed = parse_domain(str(form.get("domain") or ""))
-    minutes, screenshot, crawl, use_proxy, mobile, field_error = _monitor_fields(form)
+    watching, days, minutes, screenshot, crawl, use_proxy, mobile, field_error = _monitor_fields(form, keep_screenshot=False)
     error = field_error or parsed.error
     if error:
         return render(
             request,
             "add.html",
             status_code=400,
-            **_add_context(domain=str(form.get("domain") or ""), error=error, interval=minutes, screenshot=screenshot, crawl=crawl, use_proxy=use_proxy, mobile=mobile),
+            **_add_context(domain=str(form.get("domain") or ""), error=error, watching=watching, watch_days=days, interval=minutes, screenshot=screenshot, crawl=crawl, use_proxy=use_proxy, mobile=mobile),
         )
     existing = session.scalar(select(Monitor).where(Monitor.hostname == parsed.hostname))
     if existing is not None:
@@ -227,13 +307,12 @@ async def add_domain(request: Request, session: Session = Depends(session_scope)
             request,
             "add.html",
             status_code=400,
-            **_add_context(domain=parsed.hostname, error="This domain is already monitored.", interval=minutes, screenshot=screenshot, crawl=crawl, use_proxy=use_proxy, mobile=mobile),
+            **_add_context(domain=parsed.hostname, error="This domain is already monitored.", watching=watching, watch_days=days, interval=minutes, screenshot=screenshot, crawl=crawl, use_proxy=use_proxy, mobile=mobile),
         )
     now = utcnow()
     monitor = Monitor(
         hostname=parsed.hostname,
         registrable_domain=parsed.registrable_domain,
-        interval_minutes=minutes,
         screenshot_enabled=screenshot,
         crawl_enabled=crawl,
         use_proxy=use_proxy,
@@ -241,8 +320,10 @@ async def add_domain(request: Request, session: Session = Depends(session_scope)
         created_at=now,
         updated_at=now,
         next_check_at=now,
+        quiet_since=now,
         last_partial=False,
     )
+    assign_attention(monitor, watching=watching, days=days, now=now, creating=True, interval=minutes)
     session.add(monitor)
     try:
         session.commit()
@@ -326,18 +407,14 @@ async def csv_import(request: Request, session: Session = Depends(session_scope)
         if parsed.hostname.lower() in existing:
             rejected.append(f"{parsed.hostname} is already monitored.")
             continue
-        try:
-            minutes = int(item.get("interval_minutes") or 5)
-        except (TypeError, ValueError):
-            minutes = 5
-        if minutes not in ALLOWED_INTERVALS:
-            rejected.append(f"{parsed.hostname} has an invalid interval.")
+        minutes, interval_error = parse_watch_interval(item.get("interval_minutes"))
+        if interval_error:
+            rejected.append(f"{parsed.hostname}: {interval_error}")
             continue
         now = utcnow()
         monitor = Monitor(
             hostname=parsed.hostname,
             registrable_domain=parsed.registrable_domain,
-            interval_minutes=minutes,
             screenshot_enabled=bool(item.get("screenshot")),
             crawl_enabled=bool(item.get("crawl")),
             use_proxy=bool(item.get("use_proxy")),
@@ -345,8 +422,10 @@ async def csv_import(request: Request, session: Session = Depends(session_scope)
             created_at=now,
             updated_at=now,
             next_check_at=now,
+            quiet_since=now,
             last_partial=False,
         )
+        assign_attention(monitor, watching=True, days=30, now=now, creating=True, interval=minutes)
         session.add(monitor)
         try:
             session.commit()
@@ -420,17 +499,19 @@ async def edit_domain(request: Request, monitor_id: int, session: Session = Depe
     monitor = session.get(Monitor, monitor_id)
     if monitor is None:
         raise HTTPException(status_code=404, detail="This domain is not monitored.")
-    minutes, screenshot, crawl, use_proxy, mobile, error = _monitor_fields(form)
+    watching, days, minutes, screenshot, crawl, use_proxy, mobile, error = _monitor_fields(
+        form, keep_screenshot=monitor.screenshot_enabled
+    )
     if error:
         flash(request, error)
         return RedirectResponse(f"/domains/{monitor.id}", status_code=303)
-    monitor.interval_minutes = minutes
     monitor.screenshot_enabled = screenshot
     monitor.crawl_enabled = crawl
     monitor.use_proxy = use_proxy
     monitor.mobile_ua = mobile
-    monitor.updated_at = utcnow()
-    move_next_check_if_sooner(monitor)
+    now = utcnow()
+    monitor.updated_at = now
+    assign_attention(monitor, watching=watching, days=days, now=now, interval=minutes)
     session.commit()
     flash(request, "Saved.")
     return RedirectResponse(f"/domains/{monitor.id}", status_code=303)
@@ -465,6 +546,27 @@ async def remove_domain(request: Request, monitor_id: int, session: Session = De
     delete_monitor(session, monitor)
     flash(request, f"Deleted {hostname}.")
     return RedirectResponse("/", status_code=303)
+
+
+@router.get("/about")
+async def about_page(request: Request):
+    return render(
+        request,
+        "about.html",
+        facts=environment_facts(request.app.state.settings),
+        scrape_rows=scrape_rows(),
+    )
+
+
+@router.get("/fragment/about-network")
+async def about_network(request: Request):
+    fresh = request.query_params.get("fresh") == "1"
+    snapshot = await current_network(fresh=fresh)
+    return render_template(
+        request,
+        "about_network.html",
+        {"network": snapshot, "trace_agent": trace_user_agent()},
+    )
 
 
 @router.get("/settings")
@@ -554,21 +656,23 @@ async def screenshot_file(shot_id: int, session: Session = Depends(session_scope
     return FileResponse(path, media_type="image/jpeg")
 
 
-def _monitor_fields(form) -> tuple[int, bool, bool, bool, bool, str | None]:
-    try:
-        minutes = int(form.get("interval_minutes") or 5)
-    except (TypeError, ValueError):
-        return 5, False, False, False, False, "Choose a valid interval."
-    if minutes not in ALLOWED_INTERVALS:
-        return 5, False, False, False, False, "Choose a valid interval."
-    return (
+def _monitor_fields(form, *, keep_screenshot: bool = False):
+    days, days_error = parse_watch_days(form.get("watch_days"))
+    minutes, interval_error = parse_watch_interval(form.get("interval_minutes"))
+    screenshot = _checked(form, "screenshot")
+    if not browser_available():
+        screenshot = keep_screenshot
+    watching = _checked(form, "watch")
+    flags = (
+        watching,
+        days,
         minutes,
-        _checked(form, "screenshot"),
+        screenshot,
         _checked(form, "crawl"),
         _checked(form, "use_proxy"),
         _checked(form, "mobile_ua"),
-        None,
     )
+    return (*flags, days_error or interval_error)
 
 
 def _checked(form, name: str) -> bool:
@@ -579,7 +683,9 @@ def _add_context(**overrides) -> dict:
     context = {
         "error": None,
         "domain": "",
-        "interval": 5,
+        "watching": True,
+        "watch_days": 30,
+        "interval": 30,
         "screenshot": False,
         "crawl": False,
         "use_proxy": False,

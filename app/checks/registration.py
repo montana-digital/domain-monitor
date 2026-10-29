@@ -6,6 +6,20 @@ from app.checks.types import UNEXPECTED
 
 logger = logging.getLogger(__name__)
 
+_NOT_REGISTERED = (
+    "not found",
+    "no match",
+    "no data found",
+    "no entries found",
+    "not registered",
+    "no object found",
+    "status: free",
+    "is available",
+    "no such domain",
+    "domain not found",
+    "is free",
+)
+
 
 @dataclass
 class RegistrationRecord:
@@ -18,6 +32,8 @@ class RegistrationRecord:
     expires_date: datetime | None = None
     nameservers: list[str] = field(default_factory=list)
     statuses: list[str] = field(default_factory=list)
+    registered: bool | None = None
+    host_org: str | None = None
 
 
 @dataclass
@@ -30,25 +46,50 @@ class RegistrationView:
     record: object | None
 
 
+def is_not_registered_message(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in _NOT_REGISTERED)
+
+
+def is_not_registered_error(exc: BaseException) -> bool:
+    if type(exc).__name__ == "ResourceDoesNotExist":
+        return True
+    return is_not_registered_message(str(exc))
+
+
 def lookup_registration(domain: str, *, rdap, whois_lookup) -> RegistrationRecord:
     rdap_error = "RDAP returned no data."
     try:
         record = rdap(domain)
+        if record is not None and record.registered is False:
+            return record
         if record is not None and record.success:
+            record.registered = True
             return record
         if record is not None and record.error:
+            if is_not_registered_message(record.error):
+                return RegistrationRecord(True, registered=False, source=record.source or "rdap")
             rdap_error = record.error
     except Exception as exc:
+        if is_not_registered_error(exc):
+            return RegistrationRecord(True, registered=False, source="rdap")
         logger.info("RDAP lookup failed for %s", domain)
         rdap_error = _short(exc)
     whois_error = "WHOIS returned no data."
     try:
         record = whois_lookup(domain)
+        if record is not None and record.registered is False:
+            return record
         if record is not None and record.success:
+            record.registered = True
             return record
         if record is not None and record.error:
+            if is_not_registered_message(record.error):
+                return RegistrationRecord(True, registered=False, source=record.source or "whois")
             whois_error = record.error
     except Exception as exc:
+        if is_not_registered_error(exc):
+            return RegistrationRecord(True, registered=False, source="whois")
         logger.info("WHOIS lookup failed for %s", domain)
         whois_error = _short(exc)
     return RegistrationRecord(False, f"RDAP failed: {rdap_error} WHOIS failed: {whois_error}")
@@ -69,13 +110,23 @@ def registration_view(snapshots: list) -> RegistrationView:
     )
 
 
-def rdap_lookup(domain: str) -> RegistrationRecord:
+def _bootstrap_whoisit():
     import whoisit
 
     bootstrapped = getattr(whoisit, "is_bootstrapped", None)
     if not callable(bootstrapped) or not bootstrapped():
         whoisit.bootstrap()
-    data = whoisit.domain(domain)
+    return whoisit
+
+
+def rdap_lookup(domain: str) -> RegistrationRecord:
+    whoisit = _bootstrap_whoisit()
+    try:
+        data = whoisit.domain(domain)
+    except Exception as exc:
+        if is_not_registered_error(exc):
+            return RegistrationRecord(True, registered=False, source="rdap")
+        raise
     record = _from_mapping(
         data if isinstance(data, dict) else {},
         source="rdap",
@@ -87,7 +138,12 @@ def rdap_lookup(domain: str) -> RegistrationRecord:
         status_keys=("status",),
     )
     if not record.success:
+        if is_not_registered_message(record.error or ""):
+            return RegistrationRecord(True, registered=False, source="rdap")
         raise RuntimeError(record.error or "RDAP returned no registration data.")
+    record.registered = True
+    if not record.registrar:
+        record.registrar = registrar_from_rdap(data if isinstance(data, dict) else {})
     return record
 
 
@@ -131,6 +187,7 @@ def _from_mapping(data, *, source: str, created_keys, updated_keys, expires_keys
         expires_date=expires,
         nameservers=nameservers,
         statuses=statuses,
+        registered=True,
     )
 
 
@@ -181,6 +238,66 @@ def _strings(value) -> list[str]:
             seen.add(text)
             cleaned.append(text)
     return cleaned
+
+
+def registrar_from_rdap(data) -> str | None:
+    """Registrar name from a whoisit domain dict when the top-level field is empty."""
+    if not isinstance(data, dict):
+        return None
+    entities = data.get("entities") or {}
+    if isinstance(entities, dict):
+        group = entities.get("registrar") or []
+        if isinstance(group, dict):
+            group = [group]
+        if isinstance(group, list):
+            for item in group:
+                name = _entity_name(item)
+                if name:
+                    return name
+    return None
+
+
+def host_org_from_rdap(data) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    entities = data.get("entities") or {}
+    if isinstance(entities, dict):
+        for role in ("registrant", "administrative", "technical"):
+            group = entities.get(role) or []
+            if isinstance(group, dict):
+                group = [group]
+            if isinstance(group, list):
+                for item in group:
+                    name = _entity_name(item)
+                    if name:
+                        return name
+    for key in ("name", "org", "organization"):
+        text = _text(data.get(key))
+        if text:
+            return text
+    return None
+
+
+def ip_org_lookup(address: str) -> str | None:
+    from app.safety import is_blocked_ip
+
+    if not address or is_blocked_ip(address):
+        return None
+    whoisit = _bootstrap_whoisit()
+    data = whoisit.ip(address)
+    return host_org_from_rdap(data if isinstance(data, dict) else {})
+
+
+def _entity_name(item) -> str | None:
+    if not isinstance(item, dict):
+        return _text(item)
+    for key in ("name", "vcardArray", "org"):
+        if key == "vcardArray":
+            continue
+        text = _text(item.get(key))
+        if text:
+            return text
+    return None
 
 
 def _short(exc: Exception) -> str:

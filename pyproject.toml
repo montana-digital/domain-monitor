@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "domain-monitor"
-version = "0.1.5"
-description = "Self-hosted web domain monitor for Linux."
+version = "0.1.6"
+description = "Self-hosted web domain monitor for Linux and Windows."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -18,14 +18,26 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "tldextract>=5.1",
   "apscheduler>=3.10",
-  "whoisit>=3.0",
-  "python-whois>=0.9",
-  "playwright>=1.49",
   "itsdangerous>=2.2",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+registration = [
+  "whoisit>=3.0",
+  "python-whois>=0.9",
+]
+full = [
+  "whoisit>=3.0",
+  "python-whois>=0.9",
+  "playwright>=1.49",
+]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "whoisit>=3.0",
+  "python-whois>=0.9",
+  "playwright>=1.49",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

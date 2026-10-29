@@ -1,12 +1,17 @@
-<label for="interval">Interval</label>
+<label class="check"><input type="checkbox" name="watch" value="yes" {% if watching %}checked{% endif %}> Watch</label>
+<label for="watch_days">Watch for days</label>
+<input id="watch_days" name="watch_days" type="number" min="1" max="365" value="{{ watch_days }}">
+<label for="interval">While watched, check every</label>
 <select id="interval" name="interval_minutes">
-  {% for minutes in intervals %}
-  <option value="{{ minutes }}" {% if interval == minutes %}selected{% endif %}>Every {{ minutes }} minute{% if minutes != 1 %}s{% endif %}</option>
+  {% for minutes in watch_intervals %}
+  <option value="{{ minutes }}" {% if interval == minutes %}selected{% endif %}>{{ interval_label(minutes) }}</option>
   {% endfor %}
 </select>
+<p class="quiet">That interval runs until this window ends. With no change it becomes routine: every 4 hours, then every 24 hours, then weekly.</p>
 <fieldset>
   <legend>Checks</legend>
-  <label class="check"><input type="checkbox" name="screenshot" value="yes" {% if screenshot %}checked{% endif %}> Screenshot</label>
+  <label class="check"><input type="checkbox" name="screenshot" value="yes" {% if screenshot %}checked{% endif %} {% if not browser_on() %}disabled{% endif %}> Screenshot</label>
+  {% if not browser_on() %}<p class="quiet">{{ browser_reason() }}</p>{% endif %}
   <label class="check"><input type="checkbox" name="crawl" value="yes" {% if crawl %}checked{% endif %}> Crawl two layers</label>
   <label class="check"><input type="checkbox" name="use_proxy" value="yes" {% if use_proxy %}checked{% endif %}> Use the proxy pool</label>
   <label class="check"><input type="checkbox" name="mobile_ua" value="yes" {% if mobile %}checked{% endif %}> Also try a mobile user agent</label>

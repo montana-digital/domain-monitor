@@ -36,6 +36,8 @@
     <p class="lede">
       <span class="pill {{ status_kind(monitor.last_status_code, monitor.last_error, monitor.last_checked_at) }}">{{ short_text(status_text(monitor.last_status_code, monitor.last_error, monitor.last_checked_at), 60) }}</span>
       <span class="tag">{{ check_level(monitor.screenshot_enabled, monitor.crawl_enabled, monitor.use_proxy, monitor.mobile_ua) }}</span>
+      <span class="tag">{% if monitor.attention == "watch" %}Watch{% else %}Routine{% endif %}</span>
+      <span class="tag">{{ interval_label(monitor.interval_minutes) }}</span>
       {% if checking %}<span class="tag">Checking</span>{% endif %}
       {% if monitor.last_partial %}<span class="tag warn">Partial{% if monitor.last_partial_reason %}: {{ monitor.last_partial_reason }}{% endif %}</span>{% endif %}
       {% if overdue %}<span class="tag warn">Overdue</span>{% endif %}
@@ -56,9 +58,14 @@
     <summary>
       <h2 id="whois-heading">WHOIS / RDAP</h2>
     </summary>
-    {% if registration.pending %}
+    {% if registration.pending and not registration_on() %}
+    <p>Registration lookups are unavailable.</p>
+    {% elif registration.pending %}
     <p>Registration lookup has not completed yet.</p>
     {% else %}
+      {% if not registration_on() %}
+      <p>Registration lookups are unavailable.</p>
+      {% endif %}
       {% if registration.failed %}
       <p class="banner">
         Registration lookup failed at {{ format_dt(registration.fetched_at) }}: {{ registration.error }}
@@ -67,6 +74,8 @@
       {% endif %}
       {% if registration.record %}
       <dl class="record">
+        <div><dt>Registered</dt><dd>{{ registered_label(monitor.registered) }}</dd></div>
+        <div><dt>Host</dt><dd>{{ monitor.host_org or "—" }}</dd></div>
         <div><dt>Registrar</dt><dd>{{ registration.record.registrar or "—" }}</dd></div>
         <div><dt>Created</dt><dd>{{ format_dt(registration.record.created_date) }}</dd></div>
         <div><dt>Updated</dt><dd>{{ format_dt(registration.record.updated_date) }}</dd></div>
@@ -78,6 +87,10 @@
       </dl>
       {% else %}
       <p>No registration record is available yet.</p>
+      <dl class="record">
+        <div><dt>Registered</dt><dd>{{ registered_label(monitor.registered) }}</dd></div>
+        <div><dt>Host</dt><dd>{{ monitor.host_org or "—" }}</dd></div>
+      </dl>
       {% endif %}
     {% endif %}
   </details>
@@ -88,7 +101,9 @@
     </summary>
     <form method="post" action="/domains/{{ monitor.id }}/edit">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      {% set interval = monitor.interval_minutes %}
+      {% set watching = monitor.attention == "watch" %}
+      {% set watch_days = monitor.watch_days %}
+      {% set interval = monitor.interval_minutes if monitor.interval_minutes in watch_intervals else 30 %}
       {% set screenshot = monitor.screenshot_enabled %}
       {% set crawl = monitor.crawl_enabled %}
       {% set use_proxy = monitor.use_proxy %}

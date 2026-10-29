@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.checks.http_check import HttpProber, HttpResult, probe_hostname
-from app.checks.registration import RegistrationRecord, registration_view
+from app.checks.registration import RegistrationRecord, registrar_from_rdap, registration_view
 from app.checks.runner import build_vantages, execute_check
 from app.checks.types import UNEXPECTED, ProxySpec
 from app.clock import as_utc, utcnow
@@ -26,6 +26,7 @@ from app.service import (
     run_monitor,
     save_snapshot,
     shutdown_checks,
+    step_attention,
     try_enqueue,
     try_enqueue_registration,
 )
@@ -232,6 +233,7 @@ def test_shutdown_cancels_a_registration_task(tmp_path, monkeypatch):
         release.wait(timeout=5)
         return RegistrationRecord(False, "late")
 
+    monkeypatch.setattr(service, "registration_available", lambda: True)
     monkeypatch.setattr(service, "_real_lookup", hang)
     monkeypatch.setattr(service, "REGISTRATION_TIMEOUT", 30)
 
@@ -373,6 +375,11 @@ def test_tick_runs_database_work_off_the_event_loop(monkeypatch):
     def retain():
         seen["retain"] = threading.get_ident()
 
+    def step():
+        seen["step"] = threading.get_ident()
+
+    monkeypatch.setattr("app.scheduler.registration_available", lambda: True)
+    monkeypatch.setattr("app.scheduler.step_attention", step)
     monkeypatch.setattr("app.scheduler.due_monitor_ids", due)
     monkeypatch.setattr("app.scheduler.registration_due_ids", lookups)
     monkeypatch.setattr("app.scheduler.maybe_retain", retain)
@@ -382,6 +389,7 @@ def test_tick_runs_database_work_off_the_event_loop(monkeypatch):
         await tick()
 
     asyncio.run(scenario())
+    assert seen["step"] != seen["loop"]
     assert seen["due"] != seen["loop"]
     assert seen["lookups"] != seen["loop"]
     assert seen["retain"] != seen["loop"]
@@ -421,6 +429,7 @@ def test_browser_wait_does_not_consume_the_check_slots(tmp_path, monkeypatch):
     from app.checks.types import Shot
 
     _setup(tmp_path)
+    monkeypatch.setattr(service, "browser_available", lambda: True)
     waiting_ids = [_monitor(f"shot{index}.example.com", screenshot_enabled=True) for index in range(8)]
     probe_id = _monitor("open.example.com")
     in_capture = asyncio.Event()
@@ -625,7 +634,7 @@ def test_home_and_rejected_domain(tmp_path):
         home = client.get("/")
         assert home.status_code == 200
         assert "Domain Monitor" in home.text
-        assert "No domains yet" in home.text
+        assert "No watched domains" in home.text
         form = client.get("/domains/new")
         token = re.search(r'name="csrf" value="([^"]+)"', form.text).group(1)
         rejected = client.post(
@@ -679,12 +688,14 @@ def _csrf(client, path: str) -> str:
     return re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
 
 
-def _saved_monitor(hostname: str, *, interval: int, checked, due) -> int:
+def _saved_monitor(hostname: str, *, interval: int, checked, due, attention: str = "watch") -> int:
     now = utcnow()
     monitor = Monitor(
         hostname=hostname,
         registrable_domain="example.com",
         interval_minutes=interval,
+        attention=attention,
+        watch_days=30,
         screenshot_enabled=False,
         crawl_enabled=False,
         use_proxy=False,
@@ -702,45 +713,47 @@ def _saved_monitor(hostname: str, *, interval: int, checked, due) -> int:
         return monitor.id
 
 
-def test_shortened_interval_becomes_due_without_waiting(tmp_path):
+def test_marking_watch_pulls_the_next_check_forward(tmp_path):
     app = create_app(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
     checked = utcnow() - timedelta(minutes=30)
-    due = checked + timedelta(minutes=60)
+    due = checked + timedelta(days=7)
     with TestClient(app) as client:
-        monitor_id = _saved_monitor("soon.example.com", interval=60, checked=checked, due=due)
+        monitor_id = _saved_monitor(
+            "soon.example.com", interval=10080, checked=checked, due=due, attention="routine"
+        )
         token = _csrf(client, f"/domains/{monitor_id}")
         saved = client.post(
             f"/domains/{monitor_id}/edit",
-            data={"csrf": token, "interval_minutes": "1"},
+            data={"csrf": token, "watch": "yes", "watch_days": "30"},
             follow_redirects=False,
         )
         assert saved.status_code == 303
     with db.SessionLocal() as session:
         monitor = session.get(Monitor, monitor_id)
-        assert monitor.interval_minutes == 1
-        assert as_utc(monitor.next_check_at) == as_utc(monitor.last_checked_at) + timedelta(minutes=1)
+        assert monitor.attention == "watch"
+        assert monitor.interval_minutes == 30
+        assert as_utc(monitor.next_check_at) == as_utc(monitor.last_checked_at) + timedelta(minutes=30)
         assert as_utc(monitor.next_check_at) < as_utc(due)
 
 
-def test_lengthened_interval_does_not_pull_the_next_check_forward(tmp_path):
+def test_leaving_watch_waits_for_the_slower_interval(tmp_path):
     app = create_app(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
     checked = utcnow() - timedelta(minutes=1)
-    due = utcnow() + timedelta(minutes=4)
+    due = utcnow() + timedelta(minutes=20)
     with TestClient(app) as client:
-        monitor_id = _saved_monitor("later.example.com", interval=5, checked=checked, due=due)
-        with db.SessionLocal() as session:
-            stored_due = as_utc(session.get(Monitor, monitor_id).next_check_at)
+        monitor_id = _saved_monitor("later.example.com", interval=30, checked=checked, due=due, attention="watch")
         token = _csrf(client, f"/domains/{monitor_id}")
         saved = client.post(
             f"/domains/{monitor_id}/edit",
-            data={"csrf": token, "interval_minutes": "60"},
+            data={"csrf": token, "watch_days": "30"},
             follow_redirects=False,
         )
         assert saved.status_code == 303
     with db.SessionLocal() as session:
         monitor = session.get(Monitor, monitor_id)
-        assert monitor.interval_minutes == 60
-        assert as_utc(monitor.next_check_at) == stored_due
+        assert monitor.attention == "routine"
+        assert monitor.interval_minutes == 240
+        assert as_utc(monitor.next_check_at) == as_utc(checked) + timedelta(hours=4)
 
 
 def test_health_succeeds_without_a_session_when_the_scheduler_is_off(tmp_path):
@@ -799,3 +812,337 @@ def test_registration_banner_keeps_another_monitors_failure(tmp_path):
         save_snapshot(failed_id, RegistrationRecord(True, source="rdap", registrar="Example Registrar"))
         cleared = client.get("/notices")
         assert "Registration lookup failed" not in cleared.text
+
+
+def test_expired_watch_becomes_a_four_hour_routine(tmp_path):
+    _setup(tmp_path)
+    now = utcnow()
+    monitor_id = _monitor("expire.example.com")
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        monitor.attention = "watch"
+        monitor.interval_minutes = 30
+        monitor.watch_until = now - timedelta(minutes=1)
+        monitor.last_checked_at = now - timedelta(minutes=10)
+        monitor.next_check_at = now
+        session.commit()
+    step_attention()
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        assert monitor.attention == "routine"
+        assert monitor.interval_minutes == 240
+        assert as_utc(monitor.next_check_at) == as_utc(monitor.last_checked_at) + timedelta(hours=4)
+
+
+def test_routine_steps_to_daily_then_weekly(tmp_path):
+    _setup(tmp_path)
+    now = utcnow()
+    daily_id = _monitor("daily.example.com")
+    weekly_id = _monitor("weekly.example.com")
+    with db.SessionLocal() as session:
+        daily = session.get(Monitor, daily_id)
+        weekly = session.get(Monitor, weekly_id)
+        daily.attention = "routine"
+        daily.routine_since = now - timedelta(days=31)
+        daily.interval_minutes = 240
+        weekly.attention = "routine"
+        weekly.routine_since = now - timedelta(days=91)
+        weekly.interval_minutes = 240
+        session.commit()
+    step_attention()
+    with db.SessionLocal() as session:
+        assert session.get(Monitor, daily_id).interval_minutes == 1440
+        assert session.get(Monitor, weekly_id).interval_minutes == 10080
+
+
+def test_chosen_watch_interval_survives_the_scheduler_and_a_status_change(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.routes.pages.try_enqueue", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("app.routes.pages.try_enqueue_registration", lambda *_args, **_kwargs: False)
+    app = create_app(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
+    with TestClient(app) as client:
+        token = _csrf(client, "/domains/new")
+        rejected = client.post(
+            "/domains",
+            data={"csrf": token, "domain": "bad.example.com", "watch": "yes", "interval_minutes": "7"},
+        )
+        assert rejected.status_code == 400
+        assert "Check interval must be one of 5, 15, 30, 60, 240 minutes." in rejected.text
+        saved = client.post(
+            "/domains",
+            data={
+                "csrf": token,
+                "domain": "five.example.com",
+                "watch": "yes",
+                "watch_days": "30",
+                "interval_minutes": "5",
+            },
+            follow_redirects=False,
+        )
+        assert saved.status_code == 303
+    with db.SessionLocal() as session:
+        monitor = session.scalar(select(Monitor).where(Monitor.hostname == "five.example.com"))
+        assert monitor.attention == "watch"
+        assert monitor.interval_minutes == 5
+        monitor_id = monitor.id
+    step_attention()
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        assert monitor.attention == "watch"
+        assert monitor.interval_minutes == 5
+        monitor.last_checked_at = utcnow() - timedelta(minutes=10)
+        monitor.last_status_code = 200
+        session.commit()
+
+    async def probe(hostname, profile, proxy_url):
+        return HttpResult(status_code=500, scheme="https", final_url=f"https://{hostname}/", latency_ms=4)
+
+    asyncio.run(run_monitor(monitor_id, "manual", probe=probe))
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        assert monitor.attention == "watch"
+        assert monitor.interval_minutes == 5
+        assert monitor.last_status_code == 500
+        assert as_utc(monitor.watch_until) > utcnow() + timedelta(days=29)
+
+
+def test_a_slower_watch_interval_waits(tmp_path):
+    app = create_app(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
+    checked = utcnow() - timedelta(minutes=1)
+    due = checked + timedelta(minutes=4)
+    with TestClient(app) as client:
+        monitor_id = _saved_monitor("slow.example.com", interval=5, checked=checked, due=due, attention="watch")
+        token = _csrf(client, f"/domains/{monitor_id}")
+        saved = client.post(
+            f"/domains/{monitor_id}/edit",
+            data={"csrf": token, "watch": "yes", "watch_days": "30", "interval_minutes": "60"},
+            follow_redirects=False,
+        )
+        assert saved.status_code == 303
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        assert monitor.interval_minutes == 60
+        assert as_utc(monitor.next_check_at) == as_utc(checked) + timedelta(minutes=60)
+
+
+def test_a_status_change_extends_the_watch_window(tmp_path):
+    _setup(tmp_path)
+    now = utcnow()
+    monitor_id = _monitor("change.example.com")
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        monitor.attention = "watch"
+        monitor.watch_days = 30
+        monitor.watch_until = now + timedelta(days=1)
+        monitor.interval_minutes = 30
+        monitor.last_checked_at = now - timedelta(hours=1)
+        monitor.last_status_code = 200
+        session.commit()
+
+    async def probe(hostname, profile, proxy_url):
+        return HttpResult(status_code=500, scheme="https", final_url=f"https://{hostname}/", latency_ms=4)
+
+    asyncio.run(run_monitor(monitor_id, "manual", probe=probe))
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        assert monitor.attention == "watch"
+        assert monitor.last_status_code == 500
+        assert as_utc(monitor.watch_until) > now + timedelta(days=29)
+
+
+def test_a_routine_change_restarts_at_four_hours(tmp_path):
+    _setup(tmp_path)
+    now = utcnow()
+    monitor_id = _monitor("restart.example.com")
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        monitor.attention = "routine"
+        monitor.interval_minutes = 10080
+        monitor.routine_since = now - timedelta(days=100)
+        monitor.last_checked_at = now - timedelta(days=1)
+        monitor.last_status_code = 200
+        session.commit()
+
+    async def probe(hostname, profile, proxy_url):
+        return HttpResult(status_code=404, scheme="https", final_url=f"https://{hostname}/", latency_ms=4)
+
+    asyncio.run(run_monitor(monitor_id, "manual", probe=probe))
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        assert monitor.attention == "routine"
+        assert monitor.interval_minutes == 240
+        assert as_utc(monitor.routine_since) > now - timedelta(minutes=1)
+
+
+def test_not_found_lookup_is_stored_as_unregistered(tmp_path):
+    _setup(tmp_path)
+    monitor_id = _monitor("missing.example.net")
+
+    def lookup(_domain):
+        return RegistrationRecord(True, registered=False, source="rdap")
+
+    asyncio.run(refresh_registration(monitor_id, lookup=lookup))
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        snapshot = session.scalars(select(RegistrationSnapshot).where(RegistrationSnapshot.monitor_id == monitor_id)).one()
+        assert monitor.registered is False
+        assert monitor.registrar is None
+        assert snapshot.success is True
+        assert snapshot.registered is False
+
+
+def test_registrar_name_comes_from_the_rdap_entity():
+    assert registrar_from_rdap({"entities": {"registrar": [{"name": "MarkMonitor Inc."}]}}) == "MarkMonitor Inc."
+    assert registrar_from_rdap({}) is None
+
+
+def test_failed_lookup_keeps_registrar_and_host(tmp_path):
+    _setup(tmp_path)
+    monitor_id = _monitor("kept.example.com")
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        monitor.last_address = "1.1.1.1"
+        session.commit()
+
+    def success(_domain):
+        return RegistrationRecord(True, source="rdap", registrar="Example Registrar")
+
+    def host(_address):
+        return "Cloudflare, Inc."
+
+    asyncio.run(refresh_registration(monitor_id, lookup=success, host_lookup=host))
+
+    def failure(_domain):
+        return RegistrationRecord(False, "RDAP failed: down")
+
+    def boom(_address):
+        raise RuntimeError("rdap down")
+
+    asyncio.run(refresh_registration(monitor_id, lookup=failure, host_lookup=boom))
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        assert monitor.registered is True
+        assert monitor.registrar == "Example Registrar"
+        assert monitor.host_org == "Cloudflare, Inc."
+
+
+def test_private_address_skips_host_lookup(tmp_path):
+    _setup(tmp_path)
+    monitor_id = _monitor("local.example.com")
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        monitor.last_address = "127.0.0.1"
+        session.commit()
+
+    def success(_domain):
+        return RegistrationRecord(True, source="rdap", registrar="Example Registrar")
+
+    def host(_address):
+        raise AssertionError("private addresses are not looked up")
+
+    asyncio.run(refresh_registration(monitor_id, lookup=success, host_lookup=host))
+    with db.SessionLocal() as session:
+        monitor = session.get(Monitor, monitor_id)
+        assert monitor.registrar == "Example Registrar"
+        assert monitor.host_org is None
+
+
+def test_check_saves_a_public_address(tmp_path):
+    from app.checks.connect import address_pins
+
+    _setup(tmp_path)
+    monitor_id = _monitor("pinned.example.com")
+
+    async def probe(hostname, profile, proxy_url):
+        address_pins.set({hostname: ["127.0.0.1", "1.1.1.1"]})
+        return HttpResult(status_code=200, scheme="https", final_url=f"https://{hostname}/", latency_ms=3)
+
+    asyncio.run(run_monitor(monitor_id, "schedule", probe=probe))
+    with db.SessionLocal() as session:
+        assert session.get(Monitor, monitor_id).last_address == "1.1.1.1"
+
+
+def test_host_org_prefers_the_registrant_name():
+    from app.checks.registration import host_org_from_rdap, is_not_registered_message
+
+    data = {"name": "CLOUDFLARENET", "entities": {"registrant": [{"name": "Cloudflare, Inc."}]}}
+    assert host_org_from_rdap(data) == "Cloudflare, Inc."
+    assert is_not_registered_message("No match for example.com")
+    assert not is_not_registered_message("connection timed out")
+
+
+def test_existing_database_gains_watch_columns(tmp_path):
+    import sqlite3
+
+    from app.models import AppSetting
+
+    path = tmp_path / "monitor.db"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        CREATE TABLE monitors (
+            id INTEGER PRIMARY KEY,
+            hostname VARCHAR(253) NOT NULL UNIQUE,
+            registrable_domain VARCHAR(253) NOT NULL,
+            interval_minutes INTEGER NOT NULL,
+            screenshot_enabled BOOLEAN NOT NULL,
+            crawl_enabled BOOLEAN NOT NULL,
+            use_proxy BOOLEAN NOT NULL,
+            mobile_ua BOOLEAN NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            last_checked_at DATETIME,
+            next_check_at DATETIME,
+            last_status_code INTEGER,
+            last_error TEXT,
+            last_partial BOOLEAN NOT NULL,
+            last_partial_reason VARCHAR(300),
+            last_scheme VARCHAR(8)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO monitors (
+            hostname, registrable_domain, interval_minutes, screenshot_enabled, crawl_enabled,
+            use_proxy, mobile_ua, created_at, updated_at, last_checked_at, last_partial
+        ) VALUES ('old.example.com', 'example.com', 5, 0, 0, 0, 0, '2026-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-02 00:00:00', 0)
+        """
+    )
+    connection.execute("CREATE TABLE app_settings (id INTEGER PRIMARY KEY, retention_days INTEGER NOT NULL)")
+    connection.execute("INSERT INTO app_settings (id, retention_days) VALUES (1, 90)")
+    connection.commit()
+    connection.close()
+    init_db(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
+    with db.SessionLocal() as session:
+        monitor = session.scalars(select(Monitor).where(Monitor.hostname == "old.example.com")).one()
+        setting = session.get(AppSetting, 1)
+        assert monitor.attention == "routine"
+        assert monitor.interval_minutes == 240
+        assert monitor.quiet_since is not None
+        assert setting.schema_version == 1
+        assert setting.retention_days == 90
+        assert setting.sample_seeded is False
+
+
+def test_sample_seed_inserts_fifty_domains_once(tmp_path):
+    from app.seed import SAMPLE_ROUTINE, SAMPLE_WATCH
+
+    assert len(SAMPLE_WATCH) == 40
+    assert len(SAMPLE_ROUTINE) == 10
+    settings = Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False, seed_sample=True)
+    init_db(settings)
+    with db.SessionLocal() as session:
+        routine = session.scalars(
+            select(Monitor).where(Monitor.attention == "routine").order_by(Monitor.quiet_since.asc())
+        ).all()
+        assert len(session.scalars(select(Monitor)).all()) == 50
+        assert len(routine) == 10
+        quiets = [as_utc(row.quiet_since) for row in routine]
+        assert quiets == sorted(quiets)
+        assert {row.interval_minutes for row in routine} == {240, 1440, 10080}
+        doomed = routine[0]
+        session.delete(doomed)
+        session.commit()
+    init_db(settings)
+    with db.SessionLocal() as session:
+        assert len(session.scalars(select(Monitor)).all()) == 49

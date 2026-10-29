@@ -68,14 +68,27 @@ def test_csv_reports_each_bad_row_and_duplicates():
     by_line = {row.line: row for row in parsed.rows}
     assert by_line[2].hostname == "google.com"
     assert by_line[2].screenshot is True
+    assert by_line[2].interval_minutes == 5
     assert by_line[3].error == "Unknown public suffix."
     assert by_line[4].hostname == "www.bbc.co.uk"
     assert by_line[4].crawl is True
     assert by_line[4].mobile_ua is True
+    assert by_line[4].interval_minutes == 15
     assert by_line[5].error == "This domain is already in the list."
-    assert "Interval" in by_line[6].error
+    assert by_line[6].error == "Check interval must be one of 5, 15, 30, 60, 240 minutes."
+    assert by_line[6].interval_minutes == 30
     again = parse_csv("taken.com\n", existing={"taken.com"})
     assert again.rows[0].error == "This domain is already in the list."
+
+
+def test_csv_uses_thirty_minutes_when_the_interval_is_absent():
+    parsed = parse_csv("domain,screenshot\nexample.com,no\n")
+    assert parsed.file_error is None
+    assert parsed.rows[0].error is None
+    assert parsed.rows[0].interval_minutes == 30
+    bare = parse_csv("example.com\n")
+    assert bare.rows[0].error is None
+    assert bare.rows[0].interval_minutes == 30
 
 
 def test_csv_rejects_more_than_500_rows():

@@ -10,6 +10,7 @@ from app.notices import notices
 from app.safety import public_hostname_error
 
 logger = logging.getLogger(__name__)
+SCREENSHOT_TIMEOUT_MS = 30_000
 
 _playwright = None
 _browser = None
@@ -137,7 +138,7 @@ async def _one(browser, url: str, profile: str, proxy_config: dict | None) -> Sh
             await route.continue_()
 
         await page.route("**/*", guard)
-        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=SCREENSHOT_TIMEOUT_MS)
         if document_blocked:
             return Shot(profile, error="Private address")
         data = await page.screenshot(type="jpeg", quality=60, full_page=False)

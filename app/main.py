@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,6 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.capabilities import refresh_capabilities
 from app.checks.screenshot import shutdown_browser
 from app.config import Settings
 from app.db import init_db
@@ -49,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if app.state.settings.start_scheduler:
+            await asyncio.to_thread(refresh_capabilities)
             prepare_schedule()
             notices.scheduler_enabled = True
             start_scheduler()

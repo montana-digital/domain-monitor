@@ -9,7 +9,12 @@ from app.checks.connect import open_client, pin_host
 from app.checks.types import HttpResult
 
 logger = logging.getLogger(__name__)
+SCHEME_ORDER = ("https", "http")
+HTTPS_SCHEME, HTTP_SCHEME = SCHEME_ORDER
+RETRY_DELAY_SECONDS = 2
 RETRY_STATUSES = {429, 503}
+PROBE_TIMEOUT_SECONDS = 20
+PROBE_ACCEPT = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"
 Attempt = Callable[[str], Awaitable[HttpResult]]
 
 
@@ -24,10 +29,10 @@ def needs_retry(result: HttpResult) -> bool:
 
 
 async def probe_hostname(hostname: str, *, attempt: Attempt, sleep: Callable[[float], Awaitable[None]]) -> HttpResult:
-    https_result = await _once_or_twice("https", attempt, sleep)
+    https_result = await _once_or_twice(HTTPS_SCHEME, attempt, sleep)
     if https_result.status_code is not None:
         return https_result
-    http_result = await _once_or_twice("http", attempt, sleep)
+    http_result = await _once_or_twice(HTTP_SCHEME, attempt, sleep)
     if http_result.status_code is not None:
         return http_result
     if https_result.error == "TLS failed":
@@ -38,7 +43,7 @@ async def probe_hostname(hostname: str, *, attempt: Attempt, sleep: Callable[[fl
 async def _once_or_twice(scheme: str, attempt: Attempt, sleep: Callable[[float], Awaitable[None]]) -> HttpResult:
     result = await attempt(scheme)
     if needs_retry(result):
-        await sleep(2)
+        await sleep(RETRY_DELAY_SECONDS)
         result = await attempt(scheme)
     return result
 
@@ -94,7 +99,7 @@ async def send_once(url: str, agent: str, proxy_url: str | None, scheme: str) ->
         async with open_client(
             follow_redirects=True,
             max_redirects=10,
-            timeout=httpx.Timeout(20.0),
+            timeout=httpx.Timeout(PROBE_TIMEOUT_SECONDS),
             proxy=proxy_url,
             event_hooks={"request": [reject_private]},
         ) as client:
@@ -102,7 +107,7 @@ async def send_once(url: str, agent: str, proxy_url: str | None, scheme: str) ->
                 url,
                 headers={
                     "User-Agent": agent,
-                    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+                    "Accept": PROBE_ACCEPT,
                 },
             )
         elapsed = int((time.monotonic() - started) * 1000)

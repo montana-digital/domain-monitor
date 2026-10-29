@@ -2,7 +2,7 @@
 
 All durable state is a SQLite file at `DATA_DIR/monitor.db`, plus JPEG files under `DATA_DIR/screenshots/` and the session secret at `DATA_DIR/secret.key`. The ORM is [app/models.py](../app/models.py). The engine setup is [app/db.py](../app/db.py).
 
-`Base.metadata.create_all` creates missing tables. It does not add columns to a table that already exists, and there is no migration package. Rebuilding against an old `monitor.db` keeps the old schema until that file is replaced or altered by hand.
+`Base.metadata.create_all` creates missing tables. It does not add columns to a table that already exists. Startup then runs `migrate_schema` in [app/db.py](../app/db.py): it reads `PRAGMA table_info`, adds any missing column, and creates the attention indexes when they are absent. `app_settings.schema_version` records that this shape has been applied. An existing `monitor.db` gains the new columns on startup. Rows that were already there become Routine at every 4 hours, with `quiet_since` taken from the last check or the created time. A new database is created in its final shape and marked current.
 
 On each connection the engine sets:
 
@@ -35,11 +35,17 @@ One row per hostname. `hostname` is unique and indexed, stored in Unicode lowerc
 
 | Column | Role |
 | --- | --- |
-| `interval_minutes` | 1, 5, 15, 30, or 60. Default 5. |
+| `interval_minutes` | While watched, one of 5, 15, 30, 60, or 240 minutes. 30 is the default. On the routine ladder, 240, then 1440, then 10080. |
+| `attention` | `watch` or `routine`. Indexed with hostname, and with `quiet_since`. |
+| `watch_days`, `watch_until` | The window set when the domain is marked Watch. Default 30 days. |
+| `quiet_since` | When the HTTP status or registration record last changed. The first result sets the baseline and does not count. Routine rows sort by this, oldest first. |
+| `routine_since` | When the domain entered the current routine stretch. 30 days later the interval becomes 24 hours. 90 days later it becomes weekly. |
+| `registered`, `registrar`, `host_org` | Copies from the latest definitive registration lookup, so the list page does not join snapshots. `registered` is null while unknown. |
+| `last_address` | First public address pinned by the last check that resolved one. The IP lookup uses it, including a follow-up when the check learns the address and the host name is still empty. A private address is not stored. |
 | `screenshot_enabled`, `crawl_enabled`, `use_proxy`, `mobile_ua` | Option flags. Check level is computed from these, not stored. |
 | `created_at`, `updated_at` | UTC. `updated_at` changes when the setup form is saved. |
 | `last_checked_at` | Finish time of the last check, including a crashed check. |
-| `next_check_at` | Indexed. The scheduler selects rows where this is null or due. Set to now when the monitor is created, staggered on startup, and set to `finished_at + interval` when a check is saved. Saving setup moves it earlier when `last_checked_at` plus the new interval (or now, if the monitor has never finished a check) is sooner than the stored time. A longer interval does not move it. |
+| `next_check_at` | Indexed. The scheduler selects rows where this is null or due. Set to now when the monitor is created, staggered on startup, and set to `finished_at + interval` when a check is saved. Marking Watch, or saving a shorter watch interval, moves it earlier when that interval is due sooner. Saving a longer watch interval sets it to `last_checked_at` plus the new interval. Leaving Watch, or a ladder step that slows the interval, does the same. |
 | `last_status_code`, `last_error`, `last_scheme` | Copy of the display result from the last check, so the list page does not join events. |
 | `last_partial`, `last_partial_reason` | Copy of the partial flag. Reason is at most 300 characters on the event. The monitor column is the same string. |
 
@@ -112,7 +118,9 @@ Append-only history of registry lookups for the monitor's registrable domain. Af
 | `source` | `rdap` or `whois`. |
 | `registrar` | Text, truncated to 300 characters on the way in. |
 | `created_date`, `updated_date`, `expires_date` | Timezone-aware datetimes when the library returned datetimes. Other shapes are stored as null. |
-| `nameservers`, `statuses` | JSON arrays of strings. Nameservers are lowercased and trailing dots are stripped. |
+| `nameservers`, `statuses` | JSON arrays of strings. Nameservers are lowercased and trailing dots are stripped. A nameserver change does not count as activity. |
+| `registered` | True when the lookup found a record, false when the registry said the name is not registered, null on a timeout or network error. |
+| `host_org` | Organization that owns the site IP, when that lookup returned a name. |
 
 ## `proxies`
 

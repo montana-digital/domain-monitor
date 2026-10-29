@@ -15,6 +15,7 @@ from app.checks.types import (
 
 logger = logging.getLogger(__name__)
 VANTAGE_CAP = 6
+CHECK_DEADLINE_SECONDS = 180
 Probe = Callable[[str, str, str | None], Awaitable[HttpResult]]
 Capture = Callable[[str, list[str], str | None], Awaitable[list[Shot]]]
 Crawl = Callable[[str, str, str | None, float], Awaitable[CrawlResult]]
@@ -57,7 +58,7 @@ async def execute_check(
     probe: Probe,
     capture: Capture,
     crawl_site: Crawl,
-    deadline_seconds: float = 180,
+    deadline_seconds: float = CHECK_DEADLINE_SECONDS,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> CheckOutcome:
     deadline = monotonic() + deadline_seconds

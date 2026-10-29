@@ -3,7 +3,7 @@ import contextvars
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -11,9 +11,19 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import selectinload
 
+from app.attention import (
+    effective_registered,
+    move_next_check_if_sooner,
+    note_activity,
+    registry_changed,
+    status_changed,
+    step_monitor,
+)
+from app.capabilities import browser_available, registration_available
+from app.checks.connect import address_pins
 from app.checks.crawl import crawl_monitor
 from app.checks.http_check import HttpProber
-from app.checks.registration import RegistrationRecord, lookup_registration, rdap_lookup, whois_lookup
+from app.checks.registration import RegistrationRecord, ip_org_lookup, lookup_registration, rdap_lookup, whois_lookup
 from app.checks.runner import execute_check, partial_reason
 from app.checks.screenshot import capture_views
 from app.checks.types import UNEXPECTED, CheckOutcome, ProxySpec
@@ -23,16 +33,20 @@ from app import db
 from app.db import commit_with_retry
 from app.models import CheckAttempt, CheckEvent, CrawlPage, Monitor, Proxy, RegistrationSnapshot, Screenshot
 from app.notices import notices
-from app.safety import proxy_label
+from app.safety import is_blocked_ip, proxy_label
 
 logger = logging.getLogger(__name__)
 REGISTRATION_TIMEOUT = 30
+HOST_TIMEOUT = 10
 LOST_RESULT = "Result could not be stored."
 CHECK_LIMIT = 8
+REGISTRATION_LIMIT = 2
+REGISTRATION_AGE_HOURS = 24
 
 _inflight: set[int] = set()
 _occupying: set[int] = set()
 _reg_inflight: set[int] = set()
+_host_followup: set[int] = set()
 _tasks: set[asyncio.Task] = set()
 _holding_slot: contextvars.ContextVar[bool] = contextvars.ContextVar("holding_slot", default=False)
 _shutting_down = False
@@ -47,7 +61,7 @@ def _semaphore(name: str, limit: int) -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
     if _sem_loop is not loop:
         _check_sem = asyncio.Semaphore(CHECK_LIMIT)
-        _reg_sem = asyncio.Semaphore(2)
+        _reg_sem = asyncio.Semaphore(REGISTRATION_LIMIT)
         _sem_loop = loop
     if name == "check":
         assert _check_sem is not None
@@ -113,7 +127,7 @@ def reset_shutdown() -> None:
 
 
 def try_enqueue_registration(monitor_id: int, _trigger: str = "schedule") -> bool:
-    if _shutting_down or monitor_id in _reg_inflight:
+    if not registration_available() or _shutting_down or monitor_id in _reg_inflight:
         return False
     try:
         loop = asyncio.get_running_loop()
@@ -134,16 +148,18 @@ def queue_ids(ids: list[int], enqueue) -> None:
             logger.exception("Could not queue monitor %s", monitor_id)
 
 
-def move_next_check_if_sooner(monitor: Monitor, now=None) -> None:
-    now = now or utcnow()
-    if monitor.last_checked_at is None:
-        candidate = now
-    else:
-        checked = as_utc(monitor.last_checked_at)
-        candidate = checked + timedelta(minutes=monitor.interval_minutes)
-    current = as_utc(monitor.next_check_at)
-    if current is not None and candidate < current:
-        monitor.next_check_at = candidate
+def step_attention() -> None:
+    if db.SessionLocal is None:
+        return
+    now = utcnow()
+    with _session() as session:
+        monitors = session.scalars(select(Monitor)).all()
+        changed = False
+        for monitor in monitors:
+            if step_monitor(monitor, now):
+                changed = True
+        if changed:
+            commit_with_retry(session)
 
 
 def registration_failure_banners() -> list[str]:
@@ -182,7 +198,7 @@ def due_monitor_ids() -> list[int]:
 
 
 def registration_due_ids() -> list[int]:
-    cutoff = utcnow() - timedelta(hours=24)
+    cutoff = utcnow() - timedelta(hours=REGISTRATION_AGE_HOURS)
     with _session() as session:
         latest = (
             select(
@@ -216,46 +232,6 @@ def stagger_due() -> None:
         for index, monitor in enumerate(due):
             monitor.next_check_at = now + timedelta(seconds=index * step)
         commit_with_retry(session)
-
-
-def recent_problems(session, limit: int = 10) -> list[dict]:
-    events = session.scalars(
-        select(CheckEvent)
-        .options(selectinload(CheckEvent.monitor))
-        .order_by(CheckEvent.finished_at.desc())
-        .limit(40)
-    ).all()
-    items: list[dict] = []
-    for event in events:
-        if event.monitor is None:
-            continue
-        for line in problem_lines(event):
-            items.append(
-                {
-                    "monitor_id": event.monitor_id,
-                    "hostname": event.monitor.hostname,
-                    "message": line,
-                    "when": event.finished_at or event.started_at,
-                }
-            )
-            if len(items) >= limit:
-                return items
-    return items
-
-
-def problem_lines(event: CheckEvent) -> list[str]:
-    lines: list[str] = []
-    if event.status_code is None and event.error:
-        lines.append(event.error)
-    elif event.status_code is not None and event.status_code >= 400:
-        lines.append(f"HTTP {event.status_code}")
-    if event.screenshot_outcome == "failed":
-        lines.append(event.screenshot_error or "Screenshot failed")
-    if event.crawl_outcome == "failed":
-        lines.append(event.crawl_error or "Crawl failed")
-    elif event.crawl_outcome == "partial":
-        lines.append(event.crawl_error or event.crawl_note or "Crawl incomplete")
-    return lines
 
 
 def maybe_retain() -> None:
@@ -309,7 +285,7 @@ async def run_monitor(monitor_id: int, trigger: str, *, probe=None, capture=None
     await _execute_and_save(monitor_id, trigger, probe=probe, capture=capture, crawl=crawl)
 
 
-async def refresh_registration(monitor_id: int, lookup=None, already_marked: bool = False) -> None:
+async def refresh_registration(monitor_id: int, lookup=None, host_lookup=None, already_marked: bool = False) -> None:
     if not already_marked:
         if monitor_id in _reg_inflight:
             return
@@ -328,17 +304,42 @@ async def refresh_registration(monitor_id: int, lookup=None, already_marked: boo
             except Exception:
                 logger.exception("Registration crashed for %s", domain)
                 record = RegistrationRecord(False, UNEXPECTED)
+            address = _stored_public_address(monitor_id)
+            org_call = host_lookup
+            if org_call is None and lookup is None and address is not None:
+                org_call = ip_org_lookup
+            if address is not None and org_call is not None:
+                try:
+                    record.host_org = await asyncio.wait_for(asyncio.to_thread(org_call, address), HOST_TIMEOUT)
+                except TimeoutError:
+                    logger.warning("Host lookup timed out for %s", address)
+                except Exception:
+                    logger.exception("Host lookup crashed for %s", address)
             save_snapshot(monitor_id, record)
     finally:
         _reg_inflight.discard(monitor_id)
+        if monitor_id in _host_followup:
+            _host_followup.discard(monitor_id)
+            try_enqueue_registration(monitor_id, "address")
 
 
 def save_snapshot(monitor_id: int, record: RegistrationRecord) -> None:
     with _session() as session:
+        monitor = session.get(Monitor, monitor_id)
+        if monitor is None:
+            return
+        previous = session.scalars(
+            select(RegistrationSnapshot)
+            .where(RegistrationSnapshot.monitor_id == monitor_id, RegistrationSnapshot.success.is_(True))
+            .order_by(RegistrationSnapshot.fetched_at.desc())
+        ).first()
+        now = utcnow()
+        changed = registry_changed(previous, record, monitor.host_org)
+        registered = effective_registered(record)
         session.add(
             RegistrationSnapshot(
                 monitor_id=monitor_id,
-                fetched_at=utcnow(),
+                fetched_at=now,
                 success=record.success,
                 error=record.error,
                 source=record.source,
@@ -348,8 +349,18 @@ def save_snapshot(monitor_id: int, record: RegistrationRecord) -> None:
                 expires_date=record.expires_date,
                 nameservers=json.dumps(record.nameservers),
                 statuses=json.dumps(record.statuses),
+                registered=registered,
+                host_org=record.host_org,
             )
         )
+        if registered is not None:
+            monitor.registered = registered
+            monitor.registrar = record.registrar if registered else None
+        if record.host_org:
+            monitor.host_org = record.host_org
+        if changed:
+            note_activity(monitor, now)
+            move_next_check_if_sooner(monitor, now)
         session.flush()
         stale = session.scalars(
             select(RegistrationSnapshot)
@@ -401,6 +412,8 @@ async def _execute_and_save(monitor_id: int, trigger: str, *, probe=None, captur
     spec = _load_spec(monitor_id)
     if spec is None:
         return
+    if capture is None and not browser_available():
+        spec = replace(spec, screenshot=False)
     started = utcnow()
     capture_call = capture or capture_views
 
@@ -558,14 +571,13 @@ def _save_outcome(spec: MonitorSpec, trigger: str, started, outcome: CheckOutcom
                 reason = partial_reason(outcome.status_code, screenshot_outcome, outcome.crawl_outcome)
                 event.partial = bool(reason)
                 event.partial_reason = reason
-                monitor.last_checked_at = finished
-                monitor.last_status_code = outcome.status_code
-                monitor.last_error = outcome.error
                 monitor.last_partial = bool(reason)
                 monitor.last_partial_reason = reason
                 monitor.last_scheme = outcome.scheme
-                monitor.next_check_at = finished + timedelta(minutes=monitor.interval_minutes)
+                _remember_address(monitor, spec.hostname)
+                _apply_check_result(monitor, outcome.status_code, outcome.error, finished)
                 commit_with_retry(session)
+                _maybe_queue_host(spec.id)
                 return
             except OperationalError:
                 session.rollback()
@@ -609,14 +621,13 @@ def _save_lost_outcome(spec: MonitorSpec, trigger: str, started, outcome: CheckO
                     crawl_failed=outcome.crawl_failed,
                 )
             )
-            monitor.last_checked_at = finished
-            monitor.last_status_code = outcome.status_code
-            monitor.last_error = error
             monitor.last_partial = outcome.partial
             monitor.last_partial_reason = outcome.partial_reason
             monitor.last_scheme = outcome.scheme
-            monitor.next_check_at = finished + timedelta(minutes=monitor.interval_minutes)
+            _remember_address(monitor, spec.hostname)
+            _apply_check_result(monitor, outcome.status_code, error, finished)
             commit_with_retry(session)
+            _maybe_queue_host(spec.id)
     except OperationalError:
         logger.exception("Could not record the lost check for %s", spec.hostname)
 
@@ -639,13 +650,56 @@ def _save_crash(spec: MonitorSpec, trigger: str, started) -> None:
                 crawl_outcome="skipped",
             )
         )
-        monitor.last_checked_at = finished
-        monitor.last_status_code = None
-        monitor.last_error = UNEXPECTED
         monitor.last_partial = False
         monitor.last_partial_reason = None
-        monitor.next_check_at = finished + timedelta(minutes=monitor.interval_minutes)
+        _apply_check_result(monitor, None, UNEXPECTED, finished)
         commit_with_retry(session)
+
+
+def _apply_check_result(monitor: Monitor, code: int | None, error: str | None, finished) -> None:
+    changed = status_changed(
+        monitor.last_status_code,
+        monitor.last_error,
+        code,
+        error,
+        monitor.last_checked_at is not None,
+    )
+    monitor.last_checked_at = finished
+    monitor.last_status_code = code
+    monitor.last_error = error
+    if changed:
+        note_activity(monitor, finished)
+    monitor.next_check_at = finished + timedelta(minutes=monitor.interval_minutes)
+
+
+def _maybe_queue_host(monitor_id: int) -> None:
+    """Ask for the host company once a check has stored a public address."""
+    if not registration_available() or _shutting_down:
+        return
+    with _session() as session:
+        monitor = session.get(Monitor, monitor_id)
+        if monitor is None or monitor.host_org or not monitor.last_address:
+            return
+        if is_blocked_ip(monitor.last_address):
+            return
+    if not try_enqueue_registration(monitor_id, "address"):
+        _host_followup.add(monitor_id)
+
+
+def _remember_address(monitor: Monitor, hostname: str) -> None:
+    pins = address_pins.get() or {}
+    for address in pins.get(hostname) or []:
+        if address and not is_blocked_ip(address):
+            monitor.last_address = address
+            return
+
+
+def _stored_public_address(monitor_id: int) -> str | None:
+    with _session() as session:
+        monitor = session.get(Monitor, monitor_id)
+        if monitor is None or not monitor.last_address or is_blocked_ip(monitor.last_address):
+            return None
+        return monitor.last_address
 
 
 def _registrable_domain(monitor_id: int) -> str | None:

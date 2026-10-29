@@ -7,8 +7,8 @@ from urllib.parse import urlsplit
 
 import tldextract
 
-ALLOWED_INTERVALS = {1, 5, 15, 30, 60}
-DEFAULT_INTERVAL = 5
+from app.attention import parse_watch_interval
+
 MAX_CSV_ROWS = 500
 _LABEL = re.compile(r"[a-z0-9-]+")
 _BOOL_TRUE = {"1", "true", "yes", "y", "on"}
@@ -140,7 +140,7 @@ def parse_csv(text: str, existing: set[str] | None = None) -> CsvParse:
     rows: list[RowResult] = []
     for line, cells in data_rows:
         raw_domain = _cell(cells, header, "domain", 0)
-        interval, interval_error = _interval(_cell(cells, header, "interval_minutes", 1))
+        interval, interval_error = parse_watch_interval(_cell(cells, header, "interval_minutes", 1))
         screenshot, screenshot_error = _bool_cell(_cell(cells, header, "screenshot", 2), False)
         crawl, crawl_error = _bool_cell(_cell(cells, header, "crawl", 3), False)
         use_proxy, proxy_error = _bool_cell(_cell(cells, header, "use_proxy", 4), False)
@@ -229,18 +229,6 @@ def _cell(cells: list[str], header: list[str] | None, name: str, position: int) 
         return ""
     index = header.index(name)
     return cells[index].strip() if index < len(cells) else ""
-
-
-def _interval(value: str) -> tuple[int, str | None]:
-    if value == "":
-        return DEFAULT_INTERVAL, None
-    try:
-        minutes = int(value)
-    except ValueError:
-        return DEFAULT_INTERVAL, f"Interval must be one of {sorted(ALLOWED_INTERVALS)}."
-    if minutes not in ALLOWED_INTERVALS:
-        return DEFAULT_INTERVAL, f"Interval must be one of {sorted(ALLOWED_INTERVALS)}."
-    return minutes, None
 
 
 def _bool_cell(value: str, default: bool) -> tuple[bool, str | None]:

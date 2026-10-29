@@ -181,7 +181,7 @@ h3 { font-size: 1.05rem; }
 
 .site-header nav {
   display: flex;
-  gap: 1.75rem;
+  gap: 1.15rem;
   flex: 1;
   align-items: center;
 }
@@ -308,7 +308,7 @@ fieldset {
   padding: 0.4rem 0.8rem 0.7rem;
 }
 input[type="checkbox"] { accent-color: var(--tn-accent-primary); }
-input[type="text"], input[type="password"], input[type="file"], select, textarea {
+input[type="text"], input[type="password"], input[type="number"], input[type="file"], select, textarea {
   width: 100%;
   max-width: 36rem;
   padding: 0.55rem 0.65rem;
@@ -442,6 +442,7 @@ th {
   padding: 0.85rem 1.1rem 1rem;
   margin: 0 0 0.75rem;
 }
+.fold.problems { margin-top: 2rem; }
 .fold > summary {
   display: flex;
   gap: 0.45rem 0.7rem;
@@ -543,7 +544,10 @@ figcaption { color: var(--tn-text-muted); font-size: 0.85rem; }
   padding: 0.7rem 0;
   border-bottom: 1px solid var(--tn-surface-border);
 }
-.pager { display: flex; gap: 1rem; align-items: center; }
+.pager { display: flex; gap: 1rem; align-items: center; margin-top: 0.8rem; }
+.list-switch { display: flex; gap: 1rem; margin: 0 0 1rem; }
+.list-switch a { color: var(--tn-text-muted); text-decoration: none; font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.list-switch a[aria-current="page"] { color: var(--tn-accent-primary); }
 .sample {
   background: var(--tn-surface-base);
   color: var(--tn-text-primary);

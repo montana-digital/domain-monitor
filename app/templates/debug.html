@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Debug · Domain Monitor{% endblock %}
+{% block main %}
+  <div class="page-head">
+    <h1>Debug</h1>
+    <p class="lede">Serious failures and warnings. A partial screenshot or crawl is not listed here.</p>
+  </div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <caption>Domains that are down or warning</caption>
+      <thead>
+        <tr>
+          <th scope="col">Domain</th>
+          <th scope="col">Severity</th>
+          <th scope="col">Status</th>
+          <th scope="col">Last checked</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set monitor = row.monitor %}
+        <tr>
+          <td><a class="host" href="/domains/{{ monitor.id }}">{{ monitor.hostname }}</a></td>
+          <td>{{ row.severity }}</td>
+          <td><span class="pill {{ status_kind(monitor.last_status_code, monitor.last_error, monitor.last_checked_at) }}">{{ short_text(status_text(monitor.last_status_code, monitor.last_error, monitor.last_checked_at), 48) }}</span></td>
+          <td>{{ format_dt(monitor.last_checked_at) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="pager" aria-label="Debug pages">
+    {% if page > 1 %}<a href="/debug?page={{ page - 1 }}">Previous</a>{% endif %}
+    <span class="quiet">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a href="/debug?page={{ page + 1 }}">Next</a>{% endif %}
+  </nav>
+  {% endif %}
+  {% else %}
+  <section class="empty">
+    <h2>No domains are down</h2>
+    <p>Warnings and serious failures show up here. Partials stay on the domain row.</p>
+  </section>
+  {% endif %}
+{% endblock %}

@@ -23,6 +23,8 @@ There is one shared password. There are no accounts, roles, or password reset. T
 
 `GET /health` does not require a session. It pings the database with `SELECT 1` and reports whether the scheduler has stalled. A healthy process returns `{"status": "ok"}`. A failure returns status 503. Anyone who can reach the port can see that result.
 
+`GET /about` and `GET /fragment/about-network` use the same session rule as the other pages. The network fragment is a fixed direct request to `1.1.1.1` and `2606:4700:4700::1111`. It does not take a URL from the operator. The page shows the machine's public address, the local route address, and the ISP name when registration can look it up. It does not show the password, the session secret, or proxy URLs.
+
 ## Session cookie
 
 Starlette `SessionMiddleware` signs the cookie with `settings.secret_key`.
@@ -108,7 +110,7 @@ httpx clients are constructed with `trust_env=False`, so a proxy is used only wh
 
 ## CSV import
 
-The preview route reads the upload into memory and rejects a body larger than 1_000_000 bytes, a non-UTF-8 body, and more than 500 data rows. Rejected rows are shown and are not written. The import route accepts the JSON list the preview rendered, caps it at 500 items, and runs each item through `parse_domain` and the interval allow-list again. A duplicate hostname is skipped.
+The preview route reads the upload into memory and rejects a body larger than 1_000_000 bytes, a non-UTF-8 body, and more than 500 data rows. Rejected rows are shown and are not written. The import route accepts the JSON list the preview rendered, caps it at 500 items, and runs each item through `parse_domain` again. Imported rows start on Watch for 30 days. A duplicate hostname is skipped.
 
 ## Chromium
 
@@ -120,7 +122,7 @@ The browser process is local. It loads the monitored page and that page's subres
 
 `DATA_DIR` holds the SQLite database, the WAL files, the secret, and JPEGs of monitored pages. The database is not encrypted. Screenshot retention removes the file and leaves the check row. Deleting a monitor unlinks its files and then deletes the rows.
 
-Registration snapshots store registrar, dates, nameservers, and statuses. They do not store the raw registry payload. Crawl rows store URL, status, error, and title, not the HTML.
+Registration snapshots store registrar, dates, nameservers, statuses, whether the name is registered, and the hosting company when an IP lookup succeeded. They do not store the raw registry payload. Crawl rows store URL, status, error, and title, not the HTML.
 
 ## Operational expectations
 

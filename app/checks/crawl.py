@@ -13,6 +13,8 @@ from app.domain_parser import parse_domain
 from app.checks.connect import open_client, pin_host
 
 logger = logging.getLogger(__name__)
+CRAWL_TIMEOUT_SECONDS = 10
+CRAWL_ACCEPT = "text/html,*/*;q=0.8"
 PAGE_CAP = 20
 BODY_LIMIT = 2_000_000
 REDIRECT_LIMIT = 5
@@ -235,7 +237,7 @@ async def fetch_on_site(
         try:
             response = await client.get(
                 current,
-                headers={"User-Agent": DESKTOP_UA, "Accept": "text/html,*/*;q=0.8"},
+                headers={"User-Agent": DESKTOP_UA, "Accept": CRAWL_ACCEPT},
             )
         except Exception as exc:
             message = classify_http_error(exc)
@@ -287,7 +289,7 @@ async def crawl_monitor(
 
     async with open_client(
         follow_redirects=False,
-        timeout=httpx.Timeout(10.0),
+        timeout=httpx.Timeout(CRAWL_TIMEOUT_SECONDS),
         proxy=proxy_url,
         event_hooks={"request": [reject_private]},
     ) as client:

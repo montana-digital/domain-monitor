@@ -11,7 +11,7 @@ from app.config import Settings
 from app.main import create_app
 from app.models import CheckAttempt, CheckEvent, CrawlPage, Monitor, Screenshot
 from app.service import retain_screenshots
-from app.presentation import format_dt, profiles_used, screenshot_mark
+from app.presentation import debug_severity, format_dt, profiles_used, screenshot_mark
 
 
 def test_screenshot_mark_tracks_whether_the_file_is_still_stored():
@@ -385,3 +385,129 @@ def test_screenshot_paths_follow_the_data_directory(tmp_path):
         followed = client.get(f"/screenshots/{kept_id}")
         assert followed.status_code == 200
         assert followed.content == b"kept-image"
+
+
+def test_debug_severity_ignores_success_and_keeps_warnings():
+    checked = utcnow()
+    assert debug_severity(None, "DNS failed", checked) == "Serious"
+    assert debug_severity(400, None, checked) == "Serious"
+    assert debug_severity(500, None, checked) == "Serious"
+    assert debug_severity(200, None, checked) is None
+    assert debug_severity(301, None, checked) == "Warning"
+    assert debug_severity(None, None, None) is None
+
+
+def _listed(hostname: str, **fields) -> Monitor:
+    now = utcnow()
+    monitor = Monitor(
+        hostname=hostname,
+        registrable_domain="example.com",
+        interval_minutes=fields.pop("interval_minutes", 30),
+        attention=fields.pop("attention", "watch"),
+        screenshot_enabled=False,
+        crawl_enabled=False,
+        use_proxy=False,
+        mobile_ua=False,
+        created_at=now,
+        updated_at=now,
+        last_partial=False,
+    )
+    for name, value in fields.items():
+        setattr(monitor, name, value)
+    return monitor
+
+
+def test_debug_page_lists_serious_and_warning_rows_only(tmp_path):
+    app = create_app(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
+    started = utcnow()
+    with TestClient(app) as client:
+        with db.SessionLocal() as session:
+            session.add_all(
+                [
+                    _listed(
+                        "partial.example.com",
+                        last_checked_at=started,
+                        last_status_code=200,
+                        last_partial=True,
+                        last_partial_reason="Screenshot failed",
+                    ),
+                    _listed("down.example.com", last_checked_at=started, last_status_code=500),
+                    _listed("warn.example.com", last_checked_at=started, last_status_code=301),
+                    _listed("ok.example.com", last_checked_at=started, last_status_code=200),
+                    _listed("pending.example.com"),
+                ]
+            )
+            session.commit()
+
+        home = client.get("/")
+        assert home.status_code == 200
+        assert "Recent problems" not in home.text
+        assert "partial.example.com" in home.text
+        assert "Screenshot failed" in home.text
+        assert ">Debug</a>" in home.text
+
+        debug = client.get("/debug")
+        assert debug.status_code == 200
+        text = debug.text
+        assert "down.example.com" in text
+        assert "Serious" in text
+        assert "warn.example.com" in text
+        assert "Warning" in text
+        assert "partial.example.com" not in text
+        assert "ok.example.com" not in text
+        assert "pending.example.com" not in text
+        assert "No domains are down" not in text
+
+        fragment = client.get("/fragment/monitors?list=watch&page=1")
+        assert fragment.status_code == 200
+        assert "problems-heading" not in fragment.text
+        assert "down.example.com" in fragment.text
+        assert "page=1" in fragment.text
+
+
+def test_monitors_page_shows_ten_and_routine_orders_by_quiet_time(tmp_path):
+    app = create_app(Settings(data_dir=tmp_path, password=None, secret_key="test-secret", start_scheduler=False))
+    now = utcnow()
+    with TestClient(app) as client:
+        with db.SessionLocal() as session:
+            registered = {0: True, 1: False, 2: None}
+            for index in range(12):
+                fields = {"attention": "watch", "quiet_since": now}
+                if index in registered:
+                    fields["registered"] = registered[index]
+                session.add(_listed(f"w{index:02d}.example.com", **fields))
+            for index, days in enumerate((3, 1, 9)):
+                session.add(
+                    _listed(
+                        f"r{index}.example.com",
+                        attention="routine",
+                        quiet_since=now - timedelta(days=days),
+                        interval_minutes=240,
+                    )
+                )
+            session.commit()
+
+        first = client.get("/?list=watch")
+        assert first.status_code == 200
+        assert "w00.example.com" in first.text
+        assert "w09.example.com" in first.text
+        assert "w10.example.com" not in first.text
+        assert "Page 1 of 2" in first.text
+        assert "<td>Yes</td>" in first.text
+        assert "<td>No</td>" in first.text
+        assert "<td>—</td>" in first.text
+
+        fragment = client.get("/fragment/monitors?list=watch&page=1")
+        assert fragment.status_code == 200
+        assert "<td>Yes</td>" in fragment.text
+        assert "<td>No</td>" in fragment.text
+        assert "<td>—</td>" in fragment.text
+
+        second = client.get("/?list=watch&page=2")
+        assert "w10.example.com" in second.text
+        assert "w11.example.com" in second.text
+        assert "w00.example.com" not in second.text
+
+        routine = client.get("/?list=routine")
+        text = routine.text
+        assert text.index("r2.example.com") < text.index("r0.example.com") < text.index("r1.example.com")

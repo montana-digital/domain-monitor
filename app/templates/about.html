@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}About · Domain Monitor{% endblock %}
+{% block main %}
+  <div class="page-head">
+    <h1>About</h1>
+    <p class="lede">This process, the machine it is running on, and how checks scrape.</p>
+  </div>
+  <section class="card" aria-labelledby="environment-heading">
+    <h2 id="environment-heading">Environment</h2>
+    <div class="table-wrap">
+      <table>
+        <caption>This process</caption>
+        <tbody>
+          <tr>
+            <th scope="row">App version</th>
+            <td class="mono">{{ facts.version }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Python</th>
+            <td class="mono">{{ facts.python_version }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Operating system</th>
+            <td>{{ facts.operating_system }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Hostname</th>
+            <td class="mono">{{ facts.hostname }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Listen</th>
+            <td class="mono">{{ facts.listen }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Data directory</th>
+            <td class="mono wrap">{{ facts.data_dir }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Password</th>
+            <td>{{ facts.password_set }}</td>
+          </tr>
+          <tr>
+            <th scope="row">HTTPS-only cookie</th>
+            <td>{{ facts.https_only }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Scheduler</th>
+            <td>{{ facts.scheduler }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Last tick</th>
+            <td>{{ format_dt(facts.last_tick) }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Registration</th>
+            <td>{{ facts.registration }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Screenshots</th>
+            <td>{{ facts.browser }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section class="card" aria-labelledby="network-heading">
+    <h2 id="network-heading">Network</h2>
+    <p class="quiet">A direct check of this machine. It does not use the proxy pool.</p>
+    <div id="about-network" hx-get="/fragment/about-network" hx-trigger="load" hx-swap="outerHTML">
+      <p class="quiet">Checking how this machine reaches the internet.</p>
+    </div>
+  </section>
+  <section class="card" aria-labelledby="scrape-heading">
+    <h2 id="scrape-heading">Scraping and polling</h2>
+    <div class="table-wrap">
+      <table>
+        <caption>Checks and the pages that refresh themselves</caption>
+        <tbody>
+          {% for label, value in scrape_rows %}
+          <tr>
+            <th scope="row">{{ label }}</th>
+            <td class="mono wrap">{{ value }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

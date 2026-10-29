@@ -19,9 +19,9 @@
     </section>
     <section class="card" aria-labelledby="csv-heading">
       <h2 id="csv-heading">CSV list</h2>
-      <p class="quiet">UTF-8, up to 500 rows and 1 MB. A header row is optional. Missing columns use a 5 minute interval and leave every check off.</p>
+      <p class="quiet">UTF-8, up to 500 rows and 1 MB. A header row is optional. Imported domains start on Watch for 30 days. A blank interval is 30 minutes. The interval must be 5, 15, 30, 60, or 240 minutes. Missing check columns leave every extra check off.</p>
       <pre class="sample">domain,interval_minutes,screenshot,crawl,use_proxy,mobile_ua
-google.com,5,no,no,no,no
+google.com,30,no,no,no,no
 www.bbc.co.uk,15,yes,yes,no,yes</pre>
       {% if csv_error %}<p class="form-error" role="alert">{{ csv_error }}</p>{% endif %}
       <form method="post" action="/domains/csv-preview" enctype="multipart/form-data">

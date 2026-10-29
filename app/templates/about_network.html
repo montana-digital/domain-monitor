@@ -1,0 +1,37 @@
+<div id="about-network">
+  <div class="table-wrap">
+    <table class="wide">
+      <caption>Direct connection</caption>
+      <thead>
+        <tr>
+          <th scope="col">Family</th>
+          <th scope="col">Internet</th>
+          <th scope="col">Public IP</th>
+          <th scope="col">Local address</th>
+          <th scope="col">HTTP</th>
+          <th scope="col">TLS</th>
+          <th scope="col">ISP</th>
+          <th scope="col">Reverse name</th>
+          <th scope="col">Error</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in network.families %}
+        <tr>
+          <td>{{ row.family }}</td>
+          <td>{% if row.internet %}Yes{% else %}No{% endif %}</td>
+          <td class="mono">{{ row.public_ip or "—" }}</td>
+          <td class="mono">{{ row.local_address or "—" }}</td>
+          <td class="mono">{{ row.http_version or "—" }}</td>
+          <td class="mono">{{ row.tls_version or "—" }}</td>
+          <td>{{ row.isp or "—" }}</td>
+          <td class="mono wrap">{{ row.reverse_name or "—" }}</td>
+          <td>{{ row.error or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="quiet">Checked {{ format_dt(network.probed_at) }}. This check uses <span class="mono">{{ trace_agent }}</span>.</p>
+  <button type="button" class="secondary" hx-get="/fragment/about-network?fresh=1" hx-target="#about-network" hx-swap="outerHTML">Check again</button>
+</div>

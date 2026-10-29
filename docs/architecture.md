@@ -11,8 +11,10 @@ Importing `app.main` calls `create_app()`, which reads the environment, creates 
 1. Creates `DATA_DIR` and `DATA_DIR/screenshots`.
 2. Opens `DATA_DIR/monitor.db` with SQLAlchemy. `check_same_thread` is false because request handlers and check tasks share the engine.
 3. On each connection sets `journal_mode=WAL`, `busy_timeout=5000`, and `foreign_keys=ON`.
-4. Runs `Base.metadata.create_all`. There is no migration tool. A new table or column in [app/models.py](../app/models.py) is created on an empty database. An existing database is left as it is when a column is added later.
-5. Inserts the single `app_settings` row (`id=1`, retention 30 days) when it is missing.
+4. Runs `Base.metadata.create_all`. That creates missing tables. It does not add a column to a table that already exists.
+5. `migrate_schema` reads `PRAGMA table_info` and adds any missing watch-list columns. When `app_settings.schema_version` is still below the current version, existing monitor rows become Routine at every 4 hours. A new database is created in its final shape and marked current. An existing `monitor.db` gains the columns on startup.
+6. Inserts the single `app_settings` row (`id=1`, retention 30 days, current schema version) when it is missing.
+7. When `seed_sample` is on (the default from the environment) and `sample_seeded` is false, inserts the sample hostnames that are not already present, then sets the flag.
 
 The ASGI app then adds middleware and routes:
 
@@ -47,13 +49,14 @@ Registration lookups are in that same task set. Cancelling the task releases the
 
 ## The tick
 
-[app/scheduler.py](../app/scheduler.py) `tick` does three independent pieces of work. An exception in one is logged and does not skip the others. The tick always stamps `notices.last_tick` at the end, which is how the UI decides the scheduler is alive.
+[app/scheduler.py](../app/scheduler.py) `tick` does four independent pieces of work. An exception in one is logged and does not skip the others. The tick always stamps `notices.last_tick` at the end, which is how the UI decides the scheduler is alive.
 
-1. **Due monitors.** `due_monitor_ids()` selects `monitors.id` where `next_check_at` is null or `<= now`. Each id is passed to `try_enqueue(..., "schedule")`. A scheduled enqueue stops once eight checks are occupying a slot, so a large due set does not create one task per monitor. Monitors left out stay due and are picked up on a later tick. Check now is not part of that cap.
-2. **Registration.** `registration_due_ids()` is one query: every monitor outer-joined to `max(fetched_at)` grouped by monitor. A monitor is due when it has no snapshot or the latest fetch is older than 24 hours. Each id is passed to `try_enqueue_registration`.
-3. **Retention.** `maybe_retain()` deletes expired screenshot files at most once an hour. See [data-model.md](data-model.md).
+1. **Attention.** `step_attention()` loads monitors and updates only a row whose mode or interval is wrong. A Watch row keeps 5, 15, 30, 60, or 240 minutes. Any other watch interval is put back to 30. A Watch row whose `watch_until` has passed becomes Routine at every 4 hours, and its next check becomes `last_checked_at` plus 4 hours. A Routine row moves to every 24 hours after 30 days on that ladder, and to weekly after 90 days. The step runs in a worker thread.
+2. **Due monitors.** `due_monitor_ids()` selects `monitors.id` where `next_check_at` is null or `<= now`. Each id is passed to `try_enqueue(..., "schedule")`. A scheduled enqueue stops once eight checks are occupying a slot, so a large due set does not create one task per monitor. Monitors left out stay due and are picked up on a later tick. Check now is not part of that cap.
+3. **Registration.** `registration_due_ids()` is one query: every monitor outer-joined to `max(fetched_at)` grouped by monitor. A monitor is due when it has no snapshot or the latest fetch is older than 24 hours. Each id is passed to `try_enqueue_registration`.
+4. **Retention.** `maybe_retain()` deletes expired screenshot files at most once an hour. See [data-model.md](data-model.md).
 
-The due-monitor query, the registration query, and the retention sweep run in a worker thread. Creating the tasks stays on the event loop.
+The attention step, the due-monitor query, the registration query, and the retention sweep run in a worker thread. Creating the tasks stays on the event loop.
 
 `queue_ids` swallows and logs an exception from a single enqueue so one monitor cannot stop the rest of the list.
 
@@ -75,7 +78,7 @@ State lives in module globals in [app/service.py](../app/service.py):
 
 `_guarded` takes a check slot, calls `_execute_and_save`, logs unexpected crashes, and always removes the id from `_inflight` and `_occupying`. For the `capture_views` call it releases that slot and takes it again before crawl and save. Probes can use the eight slots while captures wait on the browser lock.
 
-Registration uses the same shape with `_reg_inflight` and the registration semaphore, and its task is added to `_tasks`. The lookup itself runs in a worker thread because `whoisit` and `python-whois` are blocking. The wait is 30 seconds. A timeout stores a failed snapshot (`Registration lookup timed out.`) and releases the slot.
+Registration uses the same shape with `_reg_inflight` and the registration semaphore, and its task is added to `_tasks`. `try_enqueue_registration` returns false when the startup probe left registration off, and the scheduler does not call it in that case. The lookup itself runs in a worker thread because `whoisit` and `python-whois` are blocking. The domain wait is 30 seconds. A timeout stores a failed snapshot (`Registration lookup timed out.`) and releases the slot. When the monitor has a saved public address, an IP organization lookup follows with a 10-second wait. A failure there keeps the previous host name. A check that stores a public address while the host name is still empty queues that lookup again, including when a registration task is already running.
 
 ## Request path
 
@@ -111,6 +114,8 @@ The pipeline itself is [check-pipeline.md](check-pipeline.md).
 | `scheduler_enabled` | Lifespan, from `start_scheduler`. |
 
 `banners()` adds a scheduler warning when `scheduler_stalled()` is true: the scheduler is enabled, and either no tick has been recorded within 60 seconds of process start, or the last tick is more than 60 seconds old. Registration failures are not stored here. The page and the `/notices` fragment append one line per monitor whose latest registration snapshot failed, read from SQLite at render time. A success for one monitor does not hide a failure for another. The browser, disk, and scheduler lines describe the process.
+
+[app/environment.py](../app/environment.py) keeps the About page's network snapshot in memory for five minutes. Check again skips that cache. The snapshot is not written to SQLite and resets when the process restarts.
 
 ## Clocks
 

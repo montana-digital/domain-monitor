@@ -23,7 +23,9 @@
       <nav aria-label="Primary">
         <a href="/" {% if section == "monitors" %}aria-current="page"{% endif %}>Monitors</a>
         <a href="/domains/new" {% if section == "add" %}aria-current="page"{% endif %}>Add domains</a>
+        <a href="/debug" {% if section == "debug" %}aria-current="page"{% endif %}>Debug</a>
         <a href="/settings" {% if section == "settings" %}aria-current="page"{% endif %}>Settings</a>
+        <a href="/about" {% if section == "about" %}aria-current="page"{% endif %}>About</a>
       </nav>
       {% endif %}
       <div class="header-tools">
@@ -40,7 +42,7 @@
       </div>
     </div>
   </header>
-  <div id="live-banners" hx-get="/notices" hx-trigger="every 30s" hx-swap="innerHTML">
+  <div id="live-banners" hx-get="/notices" hx-trigger="every {{ notice_poll_seconds }}s" hx-swap="innerHTML">
     {% include "notices.html" %}
   </div>
   {% if flash %}

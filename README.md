@@ -1,6 +1,6 @@
 # Domain Monitor
 
-Domain Monitor is a single-process Python app for watching web domains from a Linux machine. It records the HTTP status, and can also take a browser screenshot, crawl two layers of the same site, and retry through a proxy or a mobile user agent.
+Domain Monitor is a single-process Python app for watching web domains from a Linux or Windows machine. It records the HTTP status, and can also take a browser screenshot, crawl two layers of the same site, and retry through a proxy or a mobile user agent.
 
 Checks run from the machine where the app is installed. A green status is a final `2xx` response after redirects.
 
@@ -8,7 +8,7 @@ Checks run from the machine where the app is installed. A green status is a fina
 
 The documents in [docs/README.md](docs/README.md) describe the architecture, data model, check pipeline, security, external services, operations, and UI. [AGENTS.md](AGENTS.md) points a later change at the right document.
 
-## Run on Ubuntu
+## Run
 
 From the repository directory, with Python 3.12 or newer:
 
@@ -16,7 +16,9 @@ From the repository directory, with Python 3.12 or newer:
 python3 launch.py
 ```
 
-The first run creates `.venv`, installs this checkout, and downloads Chromium into `.playwright`. It may ask for a sudo password to install the Python venv package for this interpreter (`python3.13-venv` on Ubuntu 25) and the libraries Chromium needs. Later runs start the server.
+On Windows, use `python launch.py`. The launcher uses the repository `.venv`. If that virtualenv is missing, or its Python is older than 3.12, it asks which install to run. Choose `1` for the full install, including Chromium, or `2` for registration lookups without the browser. Enter cancels and changes nothing. `--yes` runs the full install without a prompt. `--without-browser` runs the smaller install without a prompt. A virtualenv whose core packages match this checkout starts the server. That launch does not download Chromium. Screenshots stay off until Chromium is present. `--repair`, or choosing the full install, downloads Chromium.
+
+The terminal prints a Domain Monitor wordmark and a progress panel. On Linux it may ask for a sudo password to install the Python venv package for this interpreter (`python3.13-venv` on Ubuntu 25) and the libraries Chromium needs. The library install is skipped if it would name Docker, containerd, podman, or WSL. A failed core install leaves what finished in place and does not start the server. Run the launcher again to continue that install. If registration, Playwright, the Chromium download, or Chromium's libraries fail, that feature stays off and the server still starts. `python launch.py --repair` retries those optional steps. Declining the install changes nothing.
 
 Open `http://127.0.0.1:8000`. The database and screenshots are stored in `./data`.
 
@@ -26,17 +28,17 @@ Set a password before you expose the port beyond localhost:
 DOMAIN_MONITOR_PASSWORD=choose-a-long-password python3 launch.py
 ```
 
-`HOST` defaults to `127.0.0.1`. Set `HOST=0.0.0.0` only when other machines must reach the port, and keep the password set. `python3 launch.py --repair` repeats the package and Chromium install.
+`HOST` defaults to `127.0.0.1`. Set `HOST=0.0.0.0` only when other machines must reach the port, and keep the password set. `python launch.py --repair` repeats the package install and downloads Chromium. `python launch.py --without-browser` installs registration lookups and leaves screenshots off.
 
-To keep the process up after logout:
+On Linux, to keep the process up after logout:
 
 ```bash
 python3 launch.py --service
 ```
 
-That writes a systemd unit which runs `.venv/bin/python -m app.main` as the user who installed it. Data stays in `./data`, and Chromium stays in `.playwright`. Starting the service does not install packages again.
+That writes a systemd unit which runs `.venv/bin/python -m app.main` as the user who installed it. Data stays in `./data`, and Chromium stays in `.playwright`. The unit does not run `launch.py`, so boot does not install packages again. `--service` is not available on Windows.
 
-Chromium comes from Playwright into `.playwright`. Nothing in this install uses Docker.
+Chromium comes from Playwright into `.playwright`. Nothing in this install uses Docker. The Linux library install is Chromium only, and it is skipped if the package list names Docker, containerd, podman, or WSL.
 
 ## Local development
 
@@ -52,7 +54,8 @@ On Linux or macOS, activate the virtualenv with `source .venv/bin/activate`. Scr
 
 ## What you can configure
 
-- Poll interval: 1, 5, 15, 30, or 60 minutes. The first check is queued as soon as the domain is saved.
+- Watch: checked at the interval you choose (5, 15, 30, 60, or 240 minutes; 30 by default) for the number of days you set (default 30). A change in HTTP status or registration extends that window and keeps the interval. The first check is queued as soon as the domain is saved.
+- Routine: when the watch window ends with no change, checks move to every 4 hours, then every 24 hours, then weekly. A later change restarts that clock at 4 hours and does not return the domain to Watch. Check now stays available.
 - Screenshot: one desktop viewport. A mobile viewport is added when the mobile user agent is on.
 - Crawl: the homepage, then up to 20 same-site links, then up to 20 links found on that first layer. Same-site means the same registrable domain (`bbc.co.uk` includes `www.bbc.co.uk`).
 - Proxy pool: HTTP or HTTPS URLs saved in Settings. A monitor uses them only when its proxy option is on. Authenticated SOCKS proxies are rejected.
@@ -72,11 +75,11 @@ Use the form, or a UTF-8 CSV of up to 500 rows and 1 MB. A header is optional:
 
 ```csv
 domain,interval_minutes,screenshot,crawl,use_proxy,mobile_ua
-google.com,5,no,no,no,no
+google.com,30,no,no,no,no
 www.bbc.co.uk,15,yes,yes,no,yes
 ```
 
-A file with one hostname per line is also accepted. Missing columns mean a 5 minute interval and every extra check off. The preview shows rejected rows and does not save them. A hostname is accepted only when it has a real public suffix, so `bbc.co.uk` passes and `example.notavalidsuffix` does not. Pasted URLs are reduced to the hostname. IP addresses are rejected.
+A file with one hostname per line is also accepted. Imported domains start on Watch for 30 days. A blank or missing interval column means 30 minutes. Any other interval must be 5, 15, 30, 60, or 240 minutes. Missing check columns leave every extra check off. The preview shows rejected rows and does not save them. A hostname is accepted only when it has a real public suffix, so `bbc.co.uk` passes and `example.notavalidsuffix` does not. Pasted URLs are reduced to the hostname. IP addresses are rejected.
 
 ## When something fails
 
@@ -85,7 +88,8 @@ Failures stay on the page. There is no email or chat alert.
 - The status cell shows **Pending** before the first result, the response code, or a short error such as **Timed out** or **DNS failed**.
 - **Partial** means the HTTP result was saved and the screenshot or crawl did not finish.
 - **Overdue** means the last completed check is older than the interval plus one minute.
-- **Recent problems** lists the latest component failures.
+- **Debug** lists domains whose latest check is a serious failure or a warning. A partial screenshot or crawl stays on the Partial tag and is not listed there.
+- The monitors table shows whether the domain is registered, the registrar, and the company that owns the site IP. Nameservers stay on the detail page.
 - A banner appears when the browser cannot start, a screenshot cannot be written, registration lookups are failing, or the scheduler has not run for a minute.
 - Registration uses RDAP first and port 43 WHOIS when RDAP cannot route the suffix. A failed lookup keeps the last good record and shows the time and reason.
 - HTTPS is tried first. If it never connects, the check tries HTTP once. A transport error, `429`, or `503` is retried once.

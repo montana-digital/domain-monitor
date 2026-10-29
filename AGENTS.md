@@ -21,7 +21,7 @@ This is a single Uvicorn process with SQLite, an in-process scheduler, and local
 
 ## Constraints that are easy to miss
 
-- Schema changes are not migrated. `create_all` creates missing tables and leaves an existing `monitor.db` alone. Say so in the change if you add a column.
+- `create_all` creates missing tables and does not add a column to an existing table. `migrate_schema` in [app/db.py](app/db.py) adds missing columns and records `app_settings.schema_version`. Raise that version when the shape changes. An existing `monitor.db` gains the columns on startup.
 - Check work shares one event loop. Blocking calls stall the UI. Registration already runs in a thread.
 - At most eight checks, two registration lookups, and one screenshot capture run at once. A check budget is 180 seconds. Vantages stop at six.
 - Address checks in [app/safety.py](app/safety.py) must stay on probes, crawl redirects, and screenshot navigations. New outbound fetches need the same gate.
@@ -42,6 +42,7 @@ Run `pytest` from the repository root after installing `.[dev]`. Match the exist
 | Check level, vantages, crawl scope, screenshot address guard | [tests/test_check_level.py](tests/test_check_level.py) |
 | Hostnames, CSV, blocked addresses, proxy URLs | [tests/test_domain_parser.py](tests/test_domain_parser.py) |
 | Detail-page summary and screenshot marks | [tests/test_detail_page.py](tests/test_detail_page.py) |
+| About page, network probe, secrets stay off the page | [tests/test_about.py](tests/test_about.py) |
 
 Update the design record in the same change when the behavior in `docs/` is no longer true.
 

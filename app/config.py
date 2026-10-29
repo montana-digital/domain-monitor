@@ -13,6 +13,7 @@ class Settings:
     port: int = 8000
     start_scheduler: bool = True
     https_only: bool = False
+    seed_sample: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -23,6 +24,7 @@ class Settings:
         host = os.environ.get("HOST", "127.0.0.1")
         port = int(os.environ.get("PORT", "8000"))
         https_only = os.environ.get("DOMAIN_MONITOR_HTTPS_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
+        seed_sample = os.environ.get("DOMAIN_MONITOR_SEED", "1").strip().lower() not in {"0", "false", "no", "off"}
         return cls(
             data_dir=data_dir,
             password=password,
@@ -30,6 +32,7 @@ class Settings:
             host=host,
             port=port,
             https_only=https_only,
+            seed_sample=seed_sample,
         )
 
 

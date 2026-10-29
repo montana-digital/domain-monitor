@@ -4,6 +4,9 @@ from datetime import datetime, timedelta
 from app.clock import as_utc, utcnow
 from app.models import Monitor
 
+MONITOR_POLL_SECONDS = 15
+NOTICE_POLL_SECONDS = 30
+
 
 def status_kind(code: int | None, error: str | None, checked_at: datetime | None) -> str:
     if checked_at is None and code is None and not error:
@@ -59,9 +62,51 @@ def is_overdue(monitor: Monitor, now: datetime | None = None, checking: bool = F
     return moment > due_by
 
 
+def interval_label(minutes: int | None) -> str:
+    if minutes == 30:
+        return "Every 30 min"
+    if minutes == 240:
+        return "Every 4 hours"
+    if minutes == 1440:
+        return "Every 24 hours"
+    if minutes == 10080:
+        return "Weekly"
+    if minutes is None:
+        return "—"
+    if minutes % 1440 == 0 and minutes:
+        days = minutes // 1440
+        return f"Every {days} day" if days == 1 else f"Every {days} days"
+    if minutes % 60 == 0 and minutes:
+        hours = minutes // 60
+        return f"Every {hours} hour" if hours == 1 else f"Every {hours} hours"
+    unit = "minute" if minutes == 1 else "minutes"
+    return f"Every {minutes} {unit}"
+
+
+def registered_label(value: bool | None) -> str:
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    return "—"
+
+
+def debug_severity(code: int | None, error: str | None, checked_at: datetime | None) -> str | None:
+    kind = status_kind(code, error, checked_at)
+    if kind == "bad":
+        return "Serious"
+    if kind == "warn":
+        return "Warning"
+    return None
+
+
 def section_for(path: str) -> str:
     if path.startswith("/settings"):
         return "settings"
+    if path.startswith("/about"):
+        return "about"
+    if path.startswith("/debug"):
+        return "debug"
     if path.startswith("/domains/new") or path == "/domains" or path.startswith("/domains/csv"):
         return "add"
     if path == "/" or path.startswith("/domains/"):

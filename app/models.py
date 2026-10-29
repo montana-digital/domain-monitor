@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -10,15 +10,28 @@ class Base(DeclarativeBase):
 
 class Monitor(Base):
     __tablename__ = "monitors"
+    __table_args__ = (
+        Index("ix_monitors_attention_hostname", "attention", "hostname"),
+        Index("ix_monitors_attention_quiet", "attention", "quiet_since"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     hostname: Mapped[str] = mapped_column(String(253), unique=True, index=True)
     registrable_domain: Mapped[str] = mapped_column(String(253))
-    interval_minutes: Mapped[int] = mapped_column(Integer, default=5)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
     screenshot_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     crawl_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     use_proxy: Mapped[bool] = mapped_column(Boolean, default=False)
     mobile_ua: Mapped[bool] = mapped_column(Boolean, default=False)
+    attention: Mapped[str] = mapped_column(String(16), default="watch")
+    watch_days: Mapped[int] = mapped_column(Integer, default=30)
+    watch_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    quiet_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    routine_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    registered: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    registrar: Mapped[str | None] = mapped_column(Text, nullable=True)
+    host_org: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -57,6 +70,8 @@ class AppSetting(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    schema_version: Mapped[int] = mapped_column(Integer, default=0)
+    sample_seeded: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class RegistrationSnapshot(Base):
@@ -74,6 +89,8 @@ class RegistrationSnapshot(Base):
     expires_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     nameservers: Mapped[str | None] = mapped_column(Text, nullable=True)
     statuses: Mapped[str | None] = mapped_column(Text, nullable=True)
+    registered: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    host_org: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     monitor: Mapped[Monitor] = relationship(back_populates="snapshots")
 

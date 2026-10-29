@@ -32,6 +32,8 @@ The operator quickstart is [README.md](../README.md). This directory is the desi
 | Check event | One completed run, including manual and scheduled runs. Table `check_events`. |
 | Partial | The HTTP result was saved, and the screenshot or crawl did not fully succeed. |
 | Overdue | The last completed check is older than the interval plus one minute, and a check is not running now. |
+| Watch | A domain checked at its saved interval (5, 15, 30, 60, or 240 minutes; 30 by default) until `watch_until`. A status or registration change extends that window and keeps the interval. |
+| Routine | The slower ladder: every 4 hours, then every 24 hours, then weekly, ordered by longest quiet first. |
 | Trigger | `schedule` for the scheduler and for a domain just added, `manual` for Check now. |
 
 ## Module map
@@ -41,6 +43,8 @@ app/main.py                 FastAPI app, middleware, lifespan
 app/config.py               Environment, data directory, session secret
 app/db.py                   SQLite engine, pragmas, sessions
 app/models.py               Tables
+app/attention.py            Watch window and routine ladder
+app/seed.py                 One-time sample hostnames
 app/scheduler.py            15-second tick
 app/service.py              Queue, persistence, retention, registration jobs
 app/safety.py               Address blocking and proxy URL rules
@@ -49,6 +53,7 @@ app/levels.py               Status / Visual / Full
 app/presentation.py         Status labels, overdue, redirect safety
 app/templating.py           Jinja environment
 app/notices.py              In-memory banners
+app/environment.py          Process facts and the direct network check
 app/clock.py                UTC timestamps
 app/routes/pages.py         HTML routes and auth dependency
 app/checks/runner.py        Vantages, deadline, aggregation
@@ -70,6 +75,7 @@ Tests live in [tests/](../tests/). They lock in fallbacks, vantage caps, crawl s
 | Check level, proxy and mobile vantages, crawl scope, screenshot address guard | [tests/test_check_level.py](../tests/test_check_level.py) |
 | Hostnames, CSV, blocked addresses, proxy URL shape | [tests/test_domain_parser.py](../tests/test_domain_parser.py) |
 | Detail-page folds and screenshot marks | [tests/test_detail_page.py](../tests/test_detail_page.py) |
+| About page, network probe, secrets stay off the page | [tests/test_about.py](../tests/test_about.py) |
 
 The same modules cover a successful login, a wrong password, a missing CSRF token, the login throttle, the HTTPS-only cookie setting, the retention sweep, a screenshot path outside `DATA_DIR/screenshots`, and `::ffff:127.0.0.1` classified as loopback. Login, CSRF, the throttle, and the cookie setting are in [tests/test_fallbacks.py](../tests/test_fallbacks.py). Retention and the screenshot path are in [tests/test_detail_page.py](../tests/test_detail_page.py). The mapped loopback address and a direct connection to the classified address are in [tests/test_domain_parser.py](../tests/test_domain_parser.py).
 
